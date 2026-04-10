@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Blue background -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#1565C0" />
+        </shape>
+    </item>
+    <!-- White down arrow (data saving symbol) -->
+    <item android:top="18dp" android:bottom="26dp" android:left="20dp" android:right="20dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFF" />
+        </shape>
+    </item>
+    <!-- Arrow point -->
+    <item android:top="32dp" android:bottom="12dp" android:left="12dp" android:right="12dp">
+        <rotate android:fromDegrees="45" android:pivotX="50%" android:pivotY="50%">
+            <shape android:shape="rectangle">
+                <solid android:color="#FFFFFF" />
+            </shape>
+        </rotate>
+    </item>
+</layer-list>
