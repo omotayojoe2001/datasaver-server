@@ -1,0 +1,3 @@
+DataSaver compression server running on port 3000
+Test: http://localhost:3000/health
+Proxy: http://localhost:3000/proxy?url=https://example.com
