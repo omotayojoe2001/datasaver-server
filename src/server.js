@@ -376,7 +376,6 @@ app.post('/api/wallet/initialize', async (req, res) => {
   if (!amount) return res.status(400).json({ error: 'amount required' });
   if (!email && !phone) return res.status(400).json({ error: 'email or phone required' });
 
-  // Resolve email: use provided email, or look up from DB by phone
   let payEmail = email;
   let payPhone = phone;
   if (!payEmail && payPhone) {
@@ -395,12 +394,51 @@ app.post('/api/wallet/initialize', async (req, res) => {
     }, {
       headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET, 'Content-Type': 'application/json' }
     });
-    res.json({ success: true, authorization_url: paystackRes.data.data.authorization_url, reference: paystackRes.data.data.reference });
+    const ref = paystackRes.data.data.reference;
+
+    // Save pending wallet transaction immediately
+    let user = null;
+    if (payPhone) { const { data: u } = await supabase.from('users').select('id').eq('phone', payPhone).single(); user = u; }
+    if (!user && payEmail) { const { data: u } = await supabase.from('users').select('id').eq('email', payEmail).single(); user = u; }
+    if (user) {
+      await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount: parseFloat(amount), status: 'pending', description: 'Wallet top-up (ref: ' + ref + ')' });
+    }
+
+    res.json({ success: true, authorization_url: paystackRes.data.data.authorization_url, reference: ref });
   } catch (e) {
     const msg = e.response ? JSON.stringify(e.response.data) : e.message;
     res.status(500).json({ error: 'Paystack init failed: ' + msg });
   }
 });
+
+// Helper: credit wallet and update pending transaction to success
+async function creditWallet(ref, amount, phone, email) {
+  let user = null;
+  if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
+  if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', email).single(); user = u; }
+  if (!user) return null;
+
+  // Check if already credited (prevent double credit)
+  const { data: existing } = await supabase.from('wallet_transactions').select('id, status').ilike('description', '%' + ref + '%').single();
+  if (existing && existing.status === 'success') return user;
+
+  // Update pending record to success, or insert if missing
+  if (existing) {
+    await supabase.from('wallet_transactions').update({ status: 'success' }).eq('id', existing.id);
+  } else {
+    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, status: 'success', description: 'Paystack top-up (ref: ' + ref + ')' });
+  }
+
+  const newBal = parseFloat(user.wallet_balance || 0) + amount;
+  await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+  return { ...user, wallet_balance: newBal };
+}
+
+// Helper: mark pending transaction as failed
+async function failWalletTxn(ref) {
+  const { data: existing } = await supabase.from('wallet_transactions').select('id').ilike('description', '%' + ref + '%').single();
+  if (existing) await supabase.from('wallet_transactions').update({ status: 'failed' }).eq('id', existing.id);
+}
 
 // GET /api/wallet/callback?reference=xxx (Paystack redirects here)
 app.get('/api/wallet/callback', async (req, res) => {
@@ -412,19 +450,11 @@ app.get('/api/wallet/callback', async (req, res) => {
     });
     const txn = verify.data.data;
     if (txn.status === 'success') {
-      const phone = txn.metadata.phone;
-      const metaEmail = txn.metadata.email;
       const amount = txn.amount / 100;
-      let user = null;
-      if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
-      if (!user && metaEmail) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', metaEmail).single(); user = u; }
-      if (user) {
-        const newBal = parseFloat(user.wallet_balance || 0) + amount;
-        await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
-        await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, description: 'Paystack top-up (ref: ' + ref + ')' });
-      }
-      res.send('<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;text-align:center;padding:40px;background:#f0f4f8}h1{color:#43A047}p{color:#333;font-size:18px}.btn{display:inline-block;margin-top:20px;padding:12px 32px;background:#1565C0;color:#fff;text-decoration:none;border-radius:8px;font-size:16px}</style></head><body><h1>Payment Successful!</h1><p>\u20a6' + amount + ' has been added to your wallet.</p><p>You can close this page and return to the app.</p></body></html>');
+      await creditWallet(ref, amount, txn.metadata.phone, txn.metadata.email);
+      res.send('<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;text-align:center;padding:40px;background:#f0f4f8}h1{color:#43A047}p{color:#333;font-size:18px}</style></head><body><h1>Payment Successful!</h1><p>\u20a6' + amount + ' has been added to your wallet.</p><p>You can close this page and return to the app.</p></body></html>');
     } else {
+      await failWalletTxn(ref);
       res.send('<h2>Payment not successful: ' + txn.status + '</h2>');
     }
   } catch (e) {
@@ -434,7 +464,6 @@ app.get('/api/wallet/callback', async (req, res) => {
 
 // POST /api/wallet/webhook (Paystack sends payment events here)
 app.post('/api/wallet/webhook', async (req, res) => {
-  // Paystack sends a hash in the header to verify authenticity
   const crypto = require('crypto');
   const hash = crypto.createHmac('sha512', PAYSTACK_SECRET).update(JSON.stringify(req.body)).digest('hex');
   if (hash !== req.headers['x-paystack-signature']) return res.sendStatus(400);
@@ -442,27 +471,9 @@ app.post('/api/wallet/webhook', async (req, res) => {
   const event = req.body;
   if (event.event === 'charge.success') {
     const txn = event.data;
-    const amount = txn.amount / 100;
-    const phone = txn.metadata && txn.metadata.phone;
-    const email = txn.metadata && txn.metadata.email;
-    const ref = txn.reference;
-
     try {
-      // Find user by phone or email
-      let user = null;
-      if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
-      if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', email).single(); user = u; }
-      if (!user) { console.log('Webhook: user not found for', phone, email); return res.sendStatus(200); }
-
-      // Check if already credited (prevent double credit)
-      const { data: existing } = await supabase.from('wallet_transactions').select('id').ilike('description', '%' + ref + '%').single();
-      if (existing) { console.log('Webhook: already credited ref', ref); return res.sendStatus(200); }
-
-      // Credit wallet
-      const newBal = parseFloat(user.wallet_balance || 0) + amount;
-      await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
-      await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, description: 'Paystack top-up (ref: ' + ref + ')' });
-      console.log('Webhook: credited', amount, 'to user', user.id, 'ref', ref);
+      const result = await creditWallet(txn.reference, txn.amount / 100, txn.metadata && txn.metadata.phone, txn.metadata && txn.metadata.email);
+      console.log('Webhook: credited ref', txn.reference, result ? 'OK' : 'user not found');
     } catch (e) {
       console.log('Webhook error:', e.message);
     }
@@ -480,26 +491,26 @@ app.post('/api/wallet/verify', async (req, res) => {
     });
     const txn = verify.data.data;
     if (txn.status === 'success') {
-      const phone = txn.metadata.phone;
-      const metaEmail = txn.metadata.email;
-      const amount = txn.amount / 100;
-      let user = null;
-      if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
-      if (!user && metaEmail) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', metaEmail).single(); user = u; }
-      if (user) {
-        // Check if already credited
-        const { data: existing } = await supabase.from('wallet_transactions').select('id').ilike('description', '%' + reference + '%').single();
-        if (!existing) {
-          const newBal = parseFloat(user.wallet_balance || 0) + amount;
-          await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
-          await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, description: 'Paystack top-up (ref: ' + reference + ')' });
-          return res.json({ success: true, balance: newBal });
-        }
-        return res.json({ success: true, balance: parseFloat(user.wallet_balance || 0), message: 'Already credited' });
-      }
+      const result = await creditWallet(reference, txn.amount / 100, txn.metadata.phone, txn.metadata.email);
+      if (result) return res.json({ success: true, balance: result.wallet_balance });
       return res.status(404).json({ error: 'User not found' });
     }
+    await failWalletTxn(reference);
     res.json({ success: false, status: txn.status });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/wallet/transactions/:phone — all wallet transactions
+app.get('/api/wallet/transactions/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
+    if (!user) return res.json([]);
+    const { data, error } = await supabase.from('wallet_transactions')
+      .select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(50);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
