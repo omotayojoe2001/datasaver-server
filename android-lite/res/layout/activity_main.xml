@@ -206,7 +206,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Used"
+                            android:text="Total Used"
                             android:textSize="11sp"
                             android:textColor="#888888" />
                     </LinearLayout>
@@ -230,7 +230,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Saved"
+                            android:text="We Saved You"
                             android:textSize="11sp"
                             android:textColor="#888888" />
                     </LinearLayout>
@@ -763,15 +763,50 @@
                 android:layout_marginTop="4dp" />
         </LinearLayout>
 
+        <!-- Sub-tabs: Data Usage | Transactions -->
         <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:background="#E0E0E0"
+            android:padding="3dp"
+            android:layout_marginLeft="16dp"
+            android:layout_marginRight="16dp"
+            android:layout_marginTop="12dp">
+            <TextView
+                android:id="@+id/histTabUsage"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Data Usage"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#1565C0" />
+            <TextView
+                android:id="@+id/histTabTxn"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Transactions"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="#666666"
+                android:background="#00000000" />
+        </LinearLayout>
+
+        <!-- Data Usage Section -->
+        <LinearLayout
+            android:id="@+id/histUsageSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- Data Usage History -->
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="12dp">
-                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Data Usage History" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" />
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="App Data Usage" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" />
                 <TextView android:id="@+id/btnSeeAllUsage" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="See All >" android:textSize="13sp" android:textColor="#1565C0" />
             </LinearLayout>
 
@@ -782,11 +817,24 @@
                 android:orientation="vertical"
                 android:layout_marginBottom="20dp" />
 
-            <!-- Transaction History -->
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="12dp">
-                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Transaction History" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" />
-                <TextView android:id="@+id/btnSeeAllTxn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="See All >" android:textSize="13sp" android:textColor="#1565C0" />
+            <!-- Savings Summary -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Savings Summary" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="12dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#E8F5E9" android:padding="14dp" android:layout_marginBottom="8dp" android:elevation="2dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Total Data Saved" android:textSize="13sp" android:textColor="#555555" />
+                <TextView android:id="@+id/tvHistorySaved" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0 B" android:textSize="28sp" android:textStyle="bold" android:textColor="#1B5E20" android:layout_marginTop="4dp" />
+                <TextView android:id="@+id/tvHistorySavedPct" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="You saved 0% of your data" android:textSize="12sp" android:textColor="#43A047" android:layout_marginTop="4dp" />
             </LinearLayout>
+        </LinearLayout>
+
+        <!-- Transaction Section (hidden by default) -->
+        <LinearLayout
+            android:id="@+id/histTxnSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
 
             <LinearLayout
                 android:id="@+id/txnHistoryContainer"
@@ -803,19 +851,9 @@
                 android:textSize="13sp"
                 android:textColor="#999999"
                 android:gravity="center"
-                android:padding="16dp"
-                android:visibility="gone" />
-
-            <!-- Savings Summary -->
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Savings Summary" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="12dp" />
-
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#E8F5E9" android:padding="14dp" android:layout_marginBottom="8dp" android:elevation="2dp">
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Total Data Saved" android:textSize="13sp" android:textColor="#555555" />
-                <TextView android:id="@+id/tvHistorySaved" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0 B" android:textSize="28sp" android:textStyle="bold" android:textColor="#1B5E20" android:layout_marginTop="4dp" />
-                <TextView android:id="@+id/tvHistorySavedPct" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0% efficiency" android:textSize="12sp" android:textColor="#43A047" android:layout_marginTop="4dp" />
-            </LinearLayout>
-
+                android:padding="16dp" />
         </LinearLayout>
+
     </LinearLayout>
 </ScrollView>
 
@@ -1058,6 +1096,24 @@
                 android:hint="Create a 4-digit PIN"
                 android:inputType="numberPassword"
                 android:maxLength="4"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Email (optional)"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/loginEmail"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your email"
+                android:inputType="textEmailAddress"
                 android:background="#FFFFFF"
                 android:padding="12dp"
                 android:textSize="15sp"

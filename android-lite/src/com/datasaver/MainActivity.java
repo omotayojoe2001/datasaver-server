@@ -6,8 +6,15 @@ import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -21,6 +28,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -60,8 +71,10 @@ public class MainActivity extends Activity {
     private int selectedDataPlanIndex = -1;
 
     private static final String SERVER_URL = "https://datasaver-server.onrender.com";
+    private static final int PICK_PHOTO = 1001;
     private ArrayList<JSONObject> fetchedPlans = new ArrayList<>();
     private TextView tvWalletBalance;
+    private boolean showAllApps = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -126,6 +139,14 @@ public class MainActivity extends Activity {
         initLogin();
         tvWalletBalance = findViewById(R.id.tvWalletBalance);
         fetchWalletBalance();
+
+        findViewById(R.id.btnViewAll).setOnClickListener(v -> {
+            showAllApps = !showAllApps;
+            ((TextView) v).setText(showAllApps ? "Show Less" : "View All >");
+            updateAppCards();
+        });
+
+        restoreSavedStats();
         updateUI();
     }
 
@@ -147,6 +168,8 @@ public class MainActivity extends Activity {
             String ph = ((EditText) findViewById(R.id.loginPhone)).getText().toString().trim();
             String pin = ((EditText) findViewById(R.id.loginPin)).getText().toString().trim();
 
+            String email = ((EditText) findViewById(R.id.loginEmail)).getText().toString().trim();
+
             if (name.isEmpty()) { tvLoginStatus.setText("Enter your name"); tvLoginStatus.setVisibility(View.VISIBLE); return; }
             if (ph.length() < 10) { tvLoginStatus.setText("Enter a valid phone number"); tvLoginStatus.setVisibility(View.VISIBLE); return; }
             if (pin.length() < 4) { tvLoginStatus.setText("Enter a 4-digit PIN"); tvLoginStatus.setVisibility(View.VISIBLE); return; }
@@ -162,6 +185,7 @@ public class MainActivity extends Activity {
                 .putString("name", name)
                 .putString("phone", ph)
                 .putString("password", pin)
+                .putString("email", email)
                 .apply();
 
             new Thread(() -> {
@@ -494,7 +518,7 @@ public class MainActivity extends Activity {
                 String uid = prefs().getString("user_id", "");
                 if (!uid.isEmpty()) body.put("user_id", uid);
                 if (isData) body.put("data_plan_id", Integer.parseInt(value));
-                else body.put("amount", value);
+                else body.put("amount", Integer.parseInt(value));
 
                 OutputStream os = conn.getOutputStream();
                 os.write(body.toString().getBytes());
@@ -596,6 +620,8 @@ public class MainActivity extends Activity {
 
     private LinearLayout usageHistoryContainer, txnHistoryContainer;
     private TextView tvNoTxn, tvHistorySaved, tvHistorySavedPct;
+    private TextView histTabUsage, histTabTxn;
+    private LinearLayout histUsageSection, histTxnSection;
     private boolean showAllUsage = false;
 
     private void initHistoryTab() {
@@ -604,13 +630,19 @@ public class MainActivity extends Activity {
         tvNoTxn = findViewById(R.id.tvNoTxn);
         tvHistorySaved = findViewById(R.id.tvHistorySaved);
         tvHistorySavedPct = findViewById(R.id.tvHistorySavedPct);
+        histTabUsage = findViewById(R.id.histTabUsage);
+        histTabTxn = findViewById(R.id.histTabTxn);
+        histUsageSection = findViewById(R.id.histUsageSection);
+        histTxnSection = findViewById(R.id.histTxnSection);
+
+        histTabUsage.setOnClickListener(v -> switchHistoryTab(true));
+        histTabTxn.setOnClickListener(v -> switchHistoryTab(false));
 
         findViewById(R.id.btnSeeAllUsage).setOnClickListener(v -> {
             showAllUsage = !showAllUsage;
             ((TextView) v).setText(showAllUsage ? "Show Less" : "See All >");
             refreshUsageHistory();
         });
-        findViewById(R.id.btnSeeAllTxn).setOnClickListener(v -> fetchTransactions());
         findViewById(R.id.btnRefreshHistory).setOnClickListener(v -> {
             refreshUsageHistory();
             fetchTransactions();
@@ -618,68 +650,105 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void switchHistoryTab(boolean usageTab) {
+        if (usageTab) {
+            histTabUsage.setBackgroundColor(0xFF1565C0);
+            histTabUsage.setTextColor(0xFFFFFFFF);
+            histTabTxn.setBackgroundColor(0x00000000);
+            histTabTxn.setTextColor(0xFF666666);
+            histUsageSection.setVisibility(View.VISIBLE);
+            histTxnSection.setVisibility(View.GONE);
+        } else {
+            histTabTxn.setBackgroundColor(0xFF1565C0);
+            histTabTxn.setTextColor(0xFFFFFFFF);
+            histTabUsage.setBackgroundColor(0x00000000);
+            histTabUsage.setTextColor(0xFF666666);
+            histUsageSection.setVisibility(View.GONE);
+            histTxnSection.setVisibility(View.VISIBLE);
+            fetchTransactions();
+        }
+    }
+
     private void refreshUsageHistory() {
         usageHistoryContainer.removeAllViews();
         Map<String, long[]> usage = DataSaverService.appDataUsage;
         if (usage.isEmpty()) {
-            addUsageCard("No data yet", "Start monitoring to see usage", "");
+            addUsageCard("No data yet", "Turn on DataSaver to start monitoring", 0, 0);
             return;
         }
 
         ArrayList<Map.Entry<String, long[]>> sorted = new ArrayList<>(usage.entrySet());
         Collections.sort(sorted, (a, b) -> Long.compare(b.getValue()[0] + b.getValue()[1], a.getValue()[0] + a.getValue()[1]));
 
-        int limit = showAllUsage ? sorted.size() : Math.min(3, sorted.size());
+        int limit = showAllUsage ? sorted.size() : Math.min(5, sorted.size());
+        long totalSaved = 0;
+        long totalUsed = 0;
         for (int i = 0; i < limit; i++) {
             Map.Entry<String, long[]> e = sorted.get(i);
             long total = e.getValue()[0] + e.getValue()[1];
             long saved = e.getValue()[2];
             if (total < 1024) continue;
-            String pct = saved > 0 ? String.format("Saved: %s (%.1f%%)", formatBytes(saved), saved * 100.0 / total) : "";
-            addUsageCard(e.getKey(), formatBytes(total) + " used", pct);
+            totalSaved += saved;
+            totalUsed += total;
+            addUsageCard(e.getKey(), formatBytes(total), total, saved);
         }
 
-        // Update savings summary
         tvHistorySaved.setText(formatBytes(DataSaverService.totalSavedBytes));
-        tvHistorySavedPct.setText(String.format("%.1f%% efficiency", DataSaverService.savedPercent));
+        double pct = totalUsed > 0 ? (DataSaverService.totalSavedBytes * 100.0 / totalUsed) : 0;
+        tvHistorySavedPct.setText(String.format("You saved %.1f%% of your data", pct));
     }
 
-    private void addUsageCard(String title, String amount, String savedText) {
+    private void addUsageCard(String appName, String amount, long total, long saved) {
         LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
+        card.setOrientation(LinearLayout.HORIZONTAL);
         card.setBackgroundColor(0xFFFFFFFF);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
         card.setElevation(2);
+        card.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(8);
         card.setLayoutParams(lp);
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
+        // App icon
+        android.widget.ImageView icon = new android.widget.ImageView(this);
+        Drawable appIcon = getAppIcon(appName);
+        if (appIcon != null) icon.setImageDrawable(appIcon);
+        else icon.setImageResource(android.R.drawable.sym_def_app_icon);
+        LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        iconLp.rightMargin = dp(10);
+        icon.setLayoutParams(iconLp);
+        card.addView(icon);
+
+        // Text
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        textCol.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
         TextView t = new TextView(this);
-        t.setText(title);
+        t.setText(appName);
         t.setTextSize(14);
         t.setTextColor(0xFF333333);
         t.setTypeface(null, Typeface.BOLD);
-        t.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        TextView a = new TextView(this);
-        a.setText(amount);
-        a.setTextSize(14);
-        a.setTextColor(0xFF1565C0);
-        a.setTypeface(null, Typeface.BOLD);
-        row.addView(t);
-        row.addView(a);
-        card.addView(row);
+        textCol.addView(t);
 
-        if (!savedText.isEmpty()) {
-            TextView s = new TextView(this);
-            s.setText(savedText);
-            s.setTextSize(12);
-            s.setTextColor(0xFF43A047);
-            s.setPadding(0, dp(4), 0, 0);
-            card.addView(s);
+        TextView sub = new TextView(this);
+        sub.setText("Used " + amount);
+        sub.setTextSize(12);
+        sub.setTextColor(0xFF888888);
+        textCol.addView(sub);
+
+        card.addView(textCol);
+
+        if (saved > 0) {
+            TextView sv = new TextView(this);
+            sv.setText("Saved " + formatBytes(saved));
+            sv.setTextSize(12);
+            sv.setTextColor(0xFF43A047);
+            sv.setTypeface(null, Typeface.BOLD);
+            card.addView(sv);
         }
+
         usageHistoryContainer.addView(card);
     }
 
@@ -708,7 +777,11 @@ public class MainActivity extends Activity {
                 handler.post(() -> showTransactions(arr));
             } catch (Exception e) {
                 handler.post(() -> {
-                    tvNoTxn.setText("Failed to load transactions");
+                    String msg = e.getMessage();
+                    if (msg != null && msg.contains("Unable to resolve host")) msg = "No internet connection";
+                    else if (msg != null && msg.contains("timed out")) msg = "Server timed out. Tap to retry.";
+                    else msg = "No transactions yet";
+                    tvNoTxn.setText(msg);
                     tvNoTxn.setVisibility(View.VISIBLE);
                 });
             }
@@ -796,7 +869,12 @@ public class MainActivity extends Activity {
         // Load saved prefs
         refreshProfileUI();
 
-        profilePhoto.setOnClickListener(v -> Toast.makeText(this, "Photo upload coming in v2", Toast.LENGTH_SHORT).show());
+        profilePhoto.setOnClickListener(v -> {
+            Intent pick = new Intent(Intent.ACTION_PICK);
+            pick.setType("image/*");
+            startActivityForResult(pick, PICK_PHOTO);
+        });
+        loadProfilePhoto();
         findViewById(R.id.rowEditProfile).setOnClickListener(v -> showEditProfileDialog());
         findViewById(R.id.rowChangePassword).setOnClickListener(v -> showChangePasswordDialog());
         findViewById(R.id.rowManageSub).setOnClickListener(v -> switchTab(2));
@@ -828,7 +906,10 @@ public class MainActivity extends Activity {
         tvWifiCompress.setTextColor(sp.getBoolean("wifi_compress", false) ? 0xFF43A047 : 0xFFD32F2F);
 
         tvServerAddr.setText(SERVER_URL.replace("https://", ""));
-        try { tvAppVersion.setText("v" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName); } catch (Exception e) { tvAppVersion.setText("v1.0.0"); }
+        try {
+            String vn = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            tvAppVersion.setText(vn != null ? "v" + vn : "v1.0.0");
+        } catch (Exception e) { tvAppVersion.setText("v1.0.0"); }
     }
 
     private void togglePref(String key, TextView tv) {
@@ -941,7 +1022,14 @@ public class MainActivity extends Activity {
             .setTitle("Log Out")
             .setMessage("Are you sure you want to log out?")
             .setPositiveButton("Log Out", (d, w) -> {
+                // Keep saved stats but clear user data
+                long sRx = prefs().getLong("saved_totalRx", 0);
+                long sTx = prefs().getLong("saved_totalTx", 0);
+                long sSaved = prefs().getLong("saved_totalSaved", 0);
+                float sPct = prefs().getFloat("saved_pct", 0);
                 prefs().edit().clear().apply();
+                prefs().edit().putLong("saved_totalRx", sRx).putLong("saved_totalTx", sTx)
+                    .putLong("saved_totalSaved", sSaved).putFloat("saved_pct", sPct).apply();
                 if (DataSaverService.isRunning) {
                     Intent i = new Intent(this, DataSaverService.class);
                     i.setAction(DataSaverService.ACTION_STOP);
@@ -956,6 +1044,54 @@ public class MainActivity extends Activity {
             })
             .setNegativeButton("Cancel", null)
             .show();
+    }
+
+    private void loadProfilePhoto() {
+        String path = prefs().getString("photo_path", "");
+        if (!path.isEmpty()) {
+            try {
+                Bitmap bmp = BitmapFactory.decodeFile(path);
+                if (bmp != null) setCircularPhoto(bmp);
+            } catch (Exception e) {}
+        }
+    }
+
+    private void setCircularPhoto(Bitmap bmp) {
+        int size = dp(72);
+        Bitmap scaled = Bitmap.createScaledBitmap(bmp, size, size, true);
+        // Create circular bitmap
+        Bitmap circular = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(circular);
+        android.graphics.Paint paint = new android.graphics.Paint();
+        paint.setAntiAlias(true);
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint);
+        paint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN));
+        canvas.drawBitmap(scaled, 0, 0, paint);
+        profilePhoto.setBackground(new BitmapDrawable(getResources(), circular));
+        profilePhoto.setText("");
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_PHOTO && resultCode == RESULT_OK && data != null) {
+            try {
+                InputStream is = getContentResolver().openInputStream(data.getData());
+                Bitmap bmp = BitmapFactory.decodeStream(is);
+                is.close();
+                if (bmp != null) {
+                    File f = new File(getFilesDir(), "profile.jpg");
+                    FileOutputStream fos = new FileOutputStream(f);
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 80, fos);
+                    fos.close();
+                    prefs().edit().putString("photo_path", f.getAbsolutePath()).apply();
+                    setCircularPhoto(bmp);
+                    Toast.makeText(this, "Photo updated", Toast.LENGTH_SHORT).show();
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "Failed to load photo", Toast.LENGTH_SHORT).show();
+            }
+        }
     }
 
     // ==================== TABS / HOME ====================
@@ -982,7 +1118,7 @@ public class MainActivity extends Activity {
             refreshUsageHistory();
             fetchTransactions();
         }
-        if (tab == 4) refreshProfileUI();
+        if (tab == 4) { refreshProfileUI(); loadProfilePhoto(); }
     }
 
     private boolean hasUsagePermission() {
@@ -1022,6 +1158,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateUI();
+        updateSummary();
         fetchWalletBalance();
         if (DataSaverService.isRunning && !polling) {
             polling = true;
@@ -1050,19 +1187,22 @@ public class MainActivity extends Activity {
     }
 
     private void updateSummary() {
-        long rx = DataSaverService.totalBytesRx;
-        long tx = DataSaverService.totalBytesTx;
-        long total = rx + tx;
+        // Total data all apps used (from NetworkStats, not just since service start)
+        long totalAppData = 0;
+        for (long[] v : DataSaverService.appDataUsage.values()) totalAppData += v[0] + v[1];
+        // Use persisted total if service hasn't populated yet
+        if (totalAppData == 0) totalAppData = prefs().getLong("saved_totalRx", 0) + prefs().getLong("saved_totalTx", 0);
         long saved = DataSaverService.totalSavedBytes;
-        double pct = DataSaverService.savedPercent;
+        if (saved == 0) saved = prefs().getLong("saved_totalSaved", 0);
+        double pct = totalAppData > 0 ? (saved * 100.0 / totalAppData) : 0;
 
-        tvUsed.setText(formatBytes(total));
+        tvUsed.setText(formatBytes(totalAppData));
         tvSaved.setText(formatBytes(saved));
         tvSavedPct.setText(String.format("%.1f%%", pct));
 
-        long used = Math.max(total - saved, 1);
+        long usedBar = Math.max(totalAppData - saved, 1);
         long savedBar = Math.max(saved, 1);
-        barUsed.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) used));
+        barUsed.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) usedBar));
         barSaved.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) savedBar));
     }
 
@@ -1085,73 +1225,135 @@ public class MainActivity extends Activity {
 
         appUsageContainer.removeAllViews();
         int count = 0;
+        int limit = showAllApps ? sorted.size() : 5;
         for (Map.Entry<String, long[]> entry : sorted) {
             long rx = entry.getValue()[0], tx = entry.getValue()[1], saved = entry.getValue()[2];
             long total = rx + tx;
             if (total < 1024) continue;
 
             LinearLayout card = new LinearLayout(this);
-            card.setOrientation(LinearLayout.VERTICAL);
+            card.setOrientation(LinearLayout.HORIZONTAL);
             card.setBackgroundColor(0xFFFFFFFF);
             card.setElevation(2);
-            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+            card.setPadding(dp(12), dp(12), dp(12), dp(12));
+            card.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             cp.bottomMargin = dp(8);
             card.setLayoutParams(cp);
 
-            LinearLayout topRow = new LinearLayout(this);
-            topRow.setOrientation(LinearLayout.HORIZONTAL);
+            // App icon
+            android.widget.ImageView icon = new android.widget.ImageView(this);
+            Drawable appIcon = getAppIcon(entry.getKey());
+            if (appIcon != null) icon.setImageDrawable(appIcon);
+            else {
+                icon.setBackgroundColor(0xFF1565C0);
+                icon.setImageResource(android.R.drawable.sym_def_app_icon);
+            }
+            LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(36), dp(36));
+            iconLp.rightMargin = dp(10);
+            icon.setLayoutParams(iconLp);
+            card.addView(icon);
+
+            // Text section
+            LinearLayout textCol = new LinearLayout(this);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            textCol.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
             TextView tvName = new TextView(this);
             tvName.setText(entry.getKey());
             tvName.setTextSize(14);
             tvName.setTextColor(0xFF333333);
             tvName.setTypeface(null, Typeface.BOLD);
-            tvName.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-            TextView tvAmt = new TextView(this);
-            tvAmt.setText(formatBytes(total));
-            tvAmt.setTextSize(14);
-            tvAmt.setTextColor(0xFF1565C0);
-            tvAmt.setTypeface(null, Typeface.BOLD);
-            topRow.addView(tvName);
-            topRow.addView(tvAmt);
-            card.addView(topRow);
+            textCol.addView(tvName);
 
-            TextView tvDetail = new TextView(this);
-            tvDetail.setText(formatBytes(rx) + " down  /  " + formatBytes(tx) + " up");
-            tvDetail.setTextSize(11);
-            tvDetail.setTextColor(0xFF888888);
-            card.addView(tvDetail);
+            TextView tvUsage = new TextView(this);
+            tvUsage.setText("Used " + formatBytes(total));
+            tvUsage.setTextSize(12);
+            tvUsage.setTextColor(0xFF888888);
+            textCol.addView(tvUsage);
 
+            card.addView(textCol);
+
+            // Saved badge
             if (saved > 0) {
                 TextView tvS = new TextView(this);
-                tvS.setText("Saved: " + formatBytes(saved) + " (" + String.format("%.1f%%", saved * 100.0 / total) + ")");
-                tvS.setTextSize(11);
-                tvS.setTextColor(0xFF1B5E20);
+                tvS.setText("Saved " + formatBytes(saved));
+                tvS.setTextSize(12);
+                tvS.setTextColor(0xFF43A047);
                 tvS.setTypeface(null, Typeface.BOLD);
                 card.addView(tvS);
             }
 
-            LinearLayout miniBar = new LinearLayout(this);
-            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4));
-            bp.topMargin = dp(6);
-            miniBar.setLayoutParams(bp);
-            View u = new View(this);
-            u.setBackgroundColor(0xFF1565C0);
-            u.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float)(total - saved)));
-            View s = new View(this);
-            s.setBackgroundColor(0xFF43A047);
-            s.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) Math.max(saved, 1)));
-            miniBar.addView(u);
-            miniBar.addView(s);
-            card.addView(miniBar);
-
             appUsageContainer.addView(card);
-            if (++count >= 10) break;
+            if (++count >= limit) break;
         }
     }
 
+    private Drawable getAppIcon(String appName) {
+        PackageManager pm = getPackageManager();
+        String[][] knownApps = DataSaverService.PRIORITY_APPS;
+        for (String[] app : knownApps) {
+            if (app[1].equals(appName)) {
+                try { return pm.getApplicationIcon(app[0]); } catch (Exception e) {}
+            }
+        }
+        return null;
+    }
+
     private int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density); }
+
+    private void persistStats() {
+        // Save totals
+        long totalAppData = 0;
+        for (long[] v : DataSaverService.appDataUsage.values()) totalAppData += v[0] + v[1];
+        prefs().edit()
+            .putLong("saved_totalRx", totalAppData > 0 ? totalAppData / 2 : DataSaverService.totalBytesRx)
+            .putLong("saved_totalTx", totalAppData > 0 ? totalAppData / 2 : DataSaverService.totalBytesTx)
+            .putLong("saved_totalSaved", DataSaverService.totalSavedBytes)
+            .putFloat("saved_pct", (float) DataSaverService.savedPercent)
+            .apply();
+        // Save per-app data as JSON
+        try {
+            JSONObject appData = new JSONObject();
+            for (Map.Entry<String, long[]> e : DataSaverService.appDataUsage.entrySet()) {
+                JSONArray arr = new JSONArray();
+                arr.put(e.getValue()[0]); arr.put(e.getValue()[1]); arr.put(e.getValue()[2]);
+                appData.put(e.getKey(), arr);
+            }
+            prefs().edit().putString("saved_appData", appData.toString()).apply();
+        } catch (Exception e) {}
+    }
+
+    private void restoreSavedStats() {
+        SharedPreferences sp = prefs();
+        long saved = sp.getLong("saved_totalSaved", 0);
+        if (saved > 0 && DataSaverService.appDataUsage.isEmpty()) {
+            DataSaverService.totalBytesRx = sp.getLong("saved_totalRx", 0);
+            DataSaverService.totalBytesTx = sp.getLong("saved_totalTx", 0);
+            DataSaverService.totalSavedBytes = saved;
+            DataSaverService.savedPercent = sp.getFloat("saved_pct", 0);
+            // Restore per-app data
+            try {
+                String json = sp.getString("saved_appData", "");
+                if (!json.isEmpty()) {
+                    JSONObject appData = new JSONObject(json);
+                    java.util.Iterator<String> keys = appData.keys();
+                    while (keys.hasNext()) {
+                        String key = keys.next();
+                        JSONArray arr = appData.getJSONArray(key);
+                        DataSaverService.appDataUsage.put(key, new long[]{arr.getLong(0), arr.getLong(1), arr.getLong(2)});
+                    }
+                }
+            } catch (Exception e) {}
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        persistStats();
+    }
 
     static String formatBytes(long b) {
         if (b < 1024) return b + " B";

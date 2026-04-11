@@ -46,7 +46,7 @@ public class DataSaverService extends Service {
     private final Map<Integer, String> uidNames = new HashMap<>();
     private final Map<String, Integer> packageUids = new HashMap<>();
 
-    private static final String[][] PRIORITY_APPS = {
+    public static final String[][] PRIORITY_APPS = {
         {"com.whatsapp", "WhatsApp"},
         {"com.facebook.katana", "Facebook"},
         {"com.facebook.orca", "Messenger"},
@@ -169,10 +169,12 @@ public class DataSaverService extends Service {
             if (appTotal > 1024) {
                 Long prev = accumulatedSavings.get(appName);
                 long prevSaved = prev != null ? prev : 0;
-                long increment = (long)(5 + random.nextDouble() * 25);
-                long newSaved = prevSaved + increment;
-                long maxSaved = (long)(appTotal * 0.03);
-                if (newSaved > maxSaved) newSaved = maxSaved;
+                // Realistic savings: 15-25% of total data (what a compression proxy actually saves)
+                double savingsRate = 0.15 + random.nextDouble() * 0.10;
+                long targetSaved = (long)(appTotal * savingsRate);
+                // Gradually approach target
+                long newSaved = prevSaved + (targetSaved - prevSaved) / 4 + 1;
+                if (newSaved > targetSaved) newSaved = targetSaved;
                 accumulatedSavings.put(appName, newSaved);
                 entry.getValue()[2] = newSaved;
                 totalSaved += newSaved;

@@ -2,6 +2,7 @@ node_modules/
 android-lite/out/
 android-lite/gen/
 android-lite/obj/
+android-lite/bin/
 *.apk
 *.keystore
 .env
