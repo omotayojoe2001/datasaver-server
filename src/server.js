@@ -23,6 +23,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
 const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN || '1a3812d2a280b21cf9a198dde909bdf3d80c0b70';
 
+// Paystack config
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET || '<paystack_secret>';
+const PAYSTACK_PUBLIC = process.env.PAYSTACK_PUBLIC || '<paystack_public>';
+
 // DataStation uses numeric network IDs
 const NETWORK_IDS = { 'MTN': 1, 'GLO': 2, '9MOBILE': 3, 'AIRTEL': 4 };
 
@@ -268,10 +272,90 @@ app.get('/api/transactions/:phone', async (req, res) => {
 });
 
 // ============================================
-// WALLET
+// WALLET + PAYSTACK
 // ============================================
 
-// POST /api/wallet/topup  { phone, amount }
+// POST /api/wallet/initialize  { phone, amount, email }
+app.post('/api/wallet/initialize', async (req, res) => {
+  const { phone, amount, email } = req.body;
+  if (!phone || !amount) return res.status(400).json({ error: 'phone and amount required' });
+  try {
+    const paystackRes = await axios.post('https://api.paystack.co/transaction/initialize', {
+      email: email || phone + '@datasaver.app',
+      amount: Math.round(parseFloat(amount) * 100),
+      currency: 'NGN',
+      metadata: { phone, type: 'wallet_topup' },
+      callback_url: 'https://datasaver-server.onrender.com/api/wallet/callback'
+    }, {
+      headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET, 'Content-Type': 'application/json' }
+    });
+    res.json({ success: true, authorization_url: paystackRes.data.data.authorization_url, reference: paystackRes.data.data.reference });
+  } catch (e) {
+    const msg = e.response ? JSON.stringify(e.response.data) : e.message;
+    res.status(500).json({ error: 'Paystack init failed: ' + msg });
+  }
+});
+
+// GET /api/wallet/callback?reference=xxx (Paystack redirects here)
+app.get('/api/wallet/callback', async (req, res) => {
+  const ref = req.query.reference || req.query.trxref;
+  if (!ref) return res.send('<h2>Missing reference</h2>');
+  try {
+    const verify = await axios.get('https://api.paystack.co/transaction/verify/' + ref, {
+      headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET }
+    });
+    const txn = verify.data.data;
+    if (txn.status === 'success') {
+      const phone = txn.metadata.phone;
+      const amount = txn.amount / 100;
+      const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
+      if (user) {
+        const newBal = parseFloat(user.wallet_balance || 0) + amount;
+        await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+        await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, description: 'Paystack top-up (ref: ' + ref + ')' });
+      }
+      res.send('<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;text-align:center;padding:40px;background:#f0f4f8}h1{color:#43A047}p{color:#333;font-size:18px}.btn{display:inline-block;margin-top:20px;padding:12px 32px;background:#1565C0;color:#fff;text-decoration:none;border-radius:8px;font-size:16px}</style></head><body><h1>Payment Successful!</h1><p>\u20a6' + amount + ' has been added to your wallet.</p><p>You can close this page and return to the app.</p></body></html>');
+    } else {
+      res.send('<h2>Payment not successful: ' + txn.status + '</h2>');
+    }
+  } catch (e) {
+    res.send('<h2>Verification failed</h2><p>' + e.message + '</p>');
+  }
+});
+
+// POST /api/wallet/verify  { reference }
+app.post('/api/wallet/verify', async (req, res) => {
+  const { reference } = req.body;
+  if (!reference) return res.status(400).json({ error: 'reference required' });
+  try {
+    const verify = await axios.get('https://api.paystack.co/transaction/verify/' + reference, {
+      headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET }
+    });
+    const txn = verify.data.data;
+    if (txn.status === 'success') {
+      const phone = txn.metadata.phone;
+      const amount = txn.amount / 100;
+      const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
+      if (user) {
+        // Check if already credited
+        const { data: existing } = await supabase.from('wallet_transactions').select('id').ilike('description', '%' + reference + '%').single();
+        if (!existing) {
+          const newBal = parseFloat(user.wallet_balance || 0) + amount;
+          await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+          await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, description: 'Paystack top-up (ref: ' + reference + ')' });
+          return res.json({ success: true, balance: newBal });
+        }
+        return res.json({ success: true, balance: parseFloat(user.wallet_balance || 0), message: 'Already credited' });
+      }
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({ success: false, status: txn.status });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/wallet/topup  { phone, amount } (manual/admin topup)
 app.post('/api/wallet/topup', async (req, res) => {
   const { phone, amount } = req.body;
   if (!phone || !amount) return res.status(400).json({ error: 'phone and amount required' });
