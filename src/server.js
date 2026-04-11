@@ -53,25 +53,25 @@ app.get('/api/plans', async (req, res) => {
 // USER API
 // ============================================
 
-// POST /api/register  { phone, pin, name, email }
+// POST /api/register  { email, pin, name, phone }
 app.post('/api/register', async (req, res) => {
   const { phone, pin, name, email } = req.body;
-  if (!phone || !pin) return res.status(400).json({ error: 'Phone and PIN required' });
+  if (!email || !pin) return res.status(400).json({ error: 'Email and PIN required' });
 
   try {
-    // Check if phone already exists
-    const { data: existing } = await supabase.from('users').select('id').eq('phone', phone).single();
-    if (existing) return res.status(409).json({ error: 'Phone number already registered. Please login instead.' });
-
     // Check if email already exists
-    if (email) {
-      const { data: emailExists } = await supabase.from('users').select('id').eq('email', email).single();
-      if (emailExists) return res.status(409).json({ error: 'Email already registered. Please login instead.' });
+    const { data: emailExists } = await supabase.from('users').select('id').eq('email', email).single();
+    if (emailExists) return res.status(409).json({ error: 'Email already registered. Please login instead.' });
+
+    // Check if phone already exists
+    if (phone) {
+      const { data: existing } = await supabase.from('users').select('id').eq('phone', phone).single();
+      if (existing) return res.status(409).json({ error: 'Phone number already registered. Please login instead.' });
     }
 
-    const row = { phone, pin: pin || '0000' };
+    const row = { email, pin: pin || '0000' };
     if (name) row.name = name;
-    if (email) row.email = email;
+    if (phone) row.phone = phone;
     const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan').single();
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'basic', message: 'Account created' });
@@ -80,15 +80,15 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// POST /api/login  { phone, pin } or { email, pin }
+// POST /api/login  { email, pin } or { phone, pin }
 app.post('/api/login', async (req, res) => {
   const { phone, email, pin } = req.body;
-  if ((!phone && !email) || !pin) return res.status(400).json({ error: 'Phone/email and PIN required' });
+  if ((!phone && !email) || !pin) return res.status(400).json({ error: 'Email/phone and PIN required' });
 
   try {
     let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at');
-    if (phone) query = query.eq('phone', phone);
-    else query = query.eq('email', email);
+    if (email) query = query.eq('email', email);
+    else query = query.eq('phone', phone);
     const { data: user, error } = await query.single();
     if (error || !user) return res.status(404).json({ error: 'Account not found. Please sign up first.' });
     if (user.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
@@ -373,13 +373,24 @@ app.get('/api/subscription/:phone', async (req, res) => {
 // POST /api/wallet/initialize  { phone, amount, email }
 app.post('/api/wallet/initialize', async (req, res) => {
   const { phone, amount, email } = req.body;
-  if (!phone || !amount) return res.status(400).json({ error: 'phone and amount required' });
+  if (!amount) return res.status(400).json({ error: 'amount required' });
+  if (!email && !phone) return res.status(400).json({ error: 'email or phone required' });
+
+  // Resolve email: use provided email, or look up from DB by phone
+  let payEmail = email;
+  let payPhone = phone;
+  if (!payEmail && payPhone) {
+    const { data: u } = await supabase.from('users').select('email, phone').eq('phone', payPhone).single();
+    if (u && u.email) payEmail = u.email;
+  }
+  if (!payEmail) return res.status(400).json({ error: 'Email is required for payment. Please update your profile.' });
+
   try {
     const paystackRes = await axios.post('https://api.paystack.co/transaction/initialize', {
-      email: email || phone + '@datasaver.ng',
+      email: payEmail,
       amount: Math.round(parseFloat(amount) * 100),
       currency: 'NGN',
-      metadata: { phone, type: 'wallet_topup' },
+      metadata: { phone: payPhone || '', email: payEmail, type: 'wallet_topup' },
       callback_url: 'https://datasaver-server.onrender.com/api/wallet/callback'
     }, {
       headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET, 'Content-Type': 'application/json' }
@@ -402,8 +413,11 @@ app.get('/api/wallet/callback', async (req, res) => {
     const txn = verify.data.data;
     if (txn.status === 'success') {
       const phone = txn.metadata.phone;
+      const metaEmail = txn.metadata.email;
       const amount = txn.amount / 100;
-      const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
+      let user = null;
+      if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
+      if (!user && metaEmail) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', metaEmail).single(); user = u; }
       if (user) {
         const newBal = parseFloat(user.wallet_balance || 0) + amount;
         await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
@@ -429,8 +443,11 @@ app.post('/api/wallet/verify', async (req, res) => {
     const txn = verify.data.data;
     if (txn.status === 'success') {
       const phone = txn.metadata.phone;
+      const metaEmail = txn.metadata.email;
       const amount = txn.amount / 100;
-      const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
+      let user = null;
+      if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
+      if (!user && metaEmail) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', metaEmail).single(); user = u; }
       if (user) {
         // Check if already credited
         const { data: existing } = await supabase.from('wallet_transactions').select('id').ilike('description', '%' + reference + '%').single();
