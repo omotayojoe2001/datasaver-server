@@ -17,6 +17,7 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -78,6 +79,23 @@ public class MainActivity extends Activity {
     private TextView tvWalletBalance, tvSavedValue;
     private boolean showAllApps = false;
     private String usageFilter = "today";
+
+    // Tips
+    private int currentTipIndex = 0;
+    private static final String[] DATA_TIPS = {
+        "\ud83d\udcf1 Disable auto-play videos on Instagram, Facebook, and TikTok. Videos use 10x more data than images.",
+        "\ud83d\udce5 Download music and videos on WiFi for offline use. Streaming a song uses ~5MB each time.",
+        "\ud83d\uddbc Set WhatsApp to only download media on WiFi: Settings \u2192 Storage \u2192 Media auto-download.",
+        "\ud83d\udd04 Turn off automatic app updates on mobile data: Play Store \u2192 Settings \u2192 WiFi only.",
+        "\ud83d\udccd Disable background data for apps you don't need: Settings \u2192 Apps \u2192 Mobile data \u2192 Background OFF.",
+        "\ud83c\udf10 Use lite versions of apps: Facebook Lite, Twitter Lite, Instagram Lite \u2014 they use 50-80% less data.",
+        "\ud83d\udce7 Set email to fetch manually instead of push. Push email checks constantly and wastes data.",
+        "\ud83d\uddfa Download Google Maps areas offline. Map loading uses a lot of data when navigating.",
+        "\ud83d\udcf8 Upload photos to cloud only on WiFi. A single photo backup can use 3-5MB.",
+        "\ud83d\udd14 Disable unnecessary push notifications. Each notification check uses a small amount of data.",
+        "\ud83d\udcac Send photos as documents on WhatsApp \u2014 they won't be compressed and re-downloaded multiple times.",
+        "\ud83d\udcca Check which apps use the most data in this app and restrict the heavy ones."
+    };
 
     // Data price table: {maxBytes, priceNaira}
     private static final long[][] DATA_PRICES = {
@@ -203,6 +221,93 @@ public class MainActivity extends Activity {
         updateUI();
         updateSummary();
         updateAppCards();
+        initTips();
+        initSavingsCard();
+        initFingerprintLogin();
+    }
+
+    // ==================== TIPS ====================
+
+    private void initTips() {
+        TextView tvTip = findViewById(R.id.tvTip);
+        TextView btnNextTip = findViewById(R.id.btnNextTip);
+        if (tvTip == null || btnNextTip == null) return;
+        tvTip.setText(DATA_TIPS[currentTipIndex]);
+        btnNextTip.setOnClickListener(v -> {
+            currentTipIndex = (currentTipIndex + 1) % DATA_TIPS.length;
+            tvTip.setText(DATA_TIPS[currentTipIndex]);
+        });
+    }
+
+    // ==================== SAVINGS CARD ====================
+
+    private void initSavingsCard() {
+        // Updated in updateSummary()
+    }
+
+    // ==================== FINGERPRINT LOGIN ====================
+
+    private void initFingerprintLogin() {
+        TextView btnFingerprint = findViewById(R.id.btnFingerprint);
+        if (btnFingerprint == null) return;
+
+        // Check if device supports fingerprint
+        if (Build.VERSION.SDK_INT >= 28) {
+            android.hardware.biometrics.BiometricManager bm = null;
+            boolean canBiometric = false;
+            if (Build.VERSION.SDK_INT >= 29) {
+                try {
+                    bm = (android.hardware.biometrics.BiometricManager) getSystemService(Context.BIOMETRIC_SERVICE);
+                } catch (Exception e) {}
+            }
+            // Fallback: check FingerprintManager
+            try {
+                android.hardware.fingerprint.FingerprintManager fm =
+                    (android.hardware.fingerprint.FingerprintManager) getSystemService(Context.FINGERPRINT_SERVICE);
+                canBiometric = fm != null && fm.isHardwareDetected() && fm.hasEnrolledFingerprints();
+            } catch (Exception e) {}
+
+            if (canBiometric && prefs().getString("phone", "").length() > 0) {
+                btnFingerprint.setVisibility(View.VISIBLE);
+                btnFingerprint.setOnClickListener(v -> showBiometricPrompt());
+            } else {
+                btnFingerprint.setVisibility(View.GONE);
+            }
+        } else {
+            btnFingerprint.setVisibility(View.GONE);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void showBiometricPrompt() {
+        if (Build.VERSION.SDK_INT >= 28) {
+            android.hardware.biometrics.BiometricPrompt.Builder builder =
+                new android.hardware.biometrics.BiometricPrompt.Builder(this);
+            builder.setTitle("DataSaver Login");
+            builder.setSubtitle("Use your fingerprint to login");
+            builder.setNegativeButton("Use PIN", getMainExecutor(), (dialog, which) -> {});
+            android.hardware.biometrics.BiometricPrompt prompt = builder.build();
+            prompt.authenticate(
+                new android.os.CancellationSignal(),
+                getMainExecutor(),
+                new android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                    @Override
+                    public void onAuthenticationSucceeded(
+                            android.hardware.biometrics.BiometricPrompt.AuthenticationResult result) {
+                        loginOverlay.setVisibility(View.GONE);
+                        refreshProfileUI();
+                        fetchWalletBalance();
+                        Toast.makeText(MainActivity.this, "Welcome back!", Toast.LENGTH_SHORT).show();
+                    }
+                    @Override
+                    public void onAuthenticationError(int errorCode, CharSequence errString) {
+                        if (errorCode != 10 && errorCode != 13) { // not user cancel
+                            Toast.makeText(MainActivity.this, "Auth error: " + errString, Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                }
+            );
+        }
     }
 
     // ==================== LOGIN / SIGNUP ====================
@@ -431,7 +536,19 @@ public class MainActivity extends Activity {
                 reader.close();
                 JSONObject res = new JSONObject(sb.toString());
                 double bal = res.optDouble("wallet_balance", 0);
-                handler.post(() -> tvWalletBalance.setText(String.format("\u20a6%.0f", bal)));
+                // Re-sync name and email from server
+                String serverName = res.isNull("name") ? "" : res.optString("name", "");
+                String serverEmail = res.isNull("email") ? "" : res.optString("email", "");
+                if (!serverName.isEmpty() && !"null".equals(serverName)) {
+                    prefs().edit().putString("name", serverName).apply();
+                }
+                if (!serverEmail.isEmpty() && !"null".equals(serverEmail)) {
+                    prefs().edit().putString("email", serverEmail).apply();
+                }
+                handler.post(() -> {
+                    tvWalletBalance.setText(String.format("\u20a6%.0f", bal));
+                    refreshProfileUI();
+                });
             } catch (Exception e) {
                 handler.post(() -> tvWalletBalance.setText("\u20a60"));
             }
@@ -1919,6 +2036,18 @@ public class MainActivity extends Activity {
         double nairaValue = bytesToNaira(saved);
         if (tvSavedValue != null) tvSavedValue.setText("Worth " + formatNaira(nairaValue));
 
+        // Update savings card
+        TextView tvCardSaved = findViewById(R.id.tvCardDataSaved);
+        TextView tvCardMoney = findViewById(R.id.tvCardMoneySaved);
+        TextView tvCardWouldSpent = findViewById(R.id.tvCardWouldSpent);
+        if (tvCardSaved != null) {
+            tvCardSaved.setText(formatBytes(saved));
+            double moneySaved = bytesToNaira(saved);
+            double wouldSpent = bytesToNaira(totalAppData);
+            tvCardMoney.setText(formatNaira(moneySaved));
+            tvCardWouldSpent.setText(formatNaira(wouldSpent));
+        }
+
         long usedBar = Math.max(totalAppData - saved, 1);
         long savedBar = Math.max(saved, 1);
         barUsed.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) usedBar));
@@ -2148,44 +2277,48 @@ public class MainActivity extends Activity {
         }
     }
 
-    // Icon cache for downloaded icons
+    // Icon cache: maps display name -> icon Drawable
     private final java.util.HashMap<String, Drawable> iconCache = new java.util.HashMap<>();
+    // Package name cache: maps display name -> package name
+    private final java.util.HashMap<String, String> nameToPackage = new java.util.HashMap<>();
+    private boolean iconCacheBuilt = false;
+
+    private void buildIconCache() {
+        if (iconCacheBuilt) return;
+        iconCacheBuilt = true;
+        PackageManager pm = getPackageManager();
+        // Step 1: Cache all priority apps by package name (most reliable)
+        for (String[] app : DataSaverService.PRIORITY_APPS) {
+            try {
+                Drawable d = pm.getApplicationIcon(app[0]);
+                iconCache.put(app[1], d);
+                nameToPackage.put(app[1], app[0]);
+            } catch (Exception e) {}
+        }
+        // Step 2: Cache ALL installed apps by their label
+        try {
+            for (ApplicationInfo ai : pm.getInstalledApplications(PackageManager.GET_META_DATA)) {
+                String label = pm.getApplicationLabel(ai).toString();
+                if (!iconCache.containsKey(label)) {
+                    try {
+                        iconCache.put(label, pm.getApplicationIcon(ai.packageName));
+                        nameToPackage.put(label, ai.packageName);
+                    } catch (Exception e) {}
+                }
+            }
+        } catch (Exception e) {}
+    }
 
     private Drawable getAppIcon(String appName) {
+        buildIconCache();
         if (iconCache.containsKey(appName)) return iconCache.get(appName);
-        PackageManager pm = getPackageManager();
-        // Try all matching package names for this app name
-        for (String[] app : DataSaverService.PRIORITY_APPS) {
-            if (app[1].equals(appName)) {
-                try {
-                    Drawable d = pm.getApplicationIcon(app[0]);
-                    iconCache.put(appName, d);
-                    return d;
-                } catch (Exception e) {}
+        // Partial match fallback
+        for (Map.Entry<String, Drawable> entry : iconCache.entrySet()) {
+            if (entry.getKey().contains(appName) || appName.contains(entry.getKey())) {
+                iconCache.put(appName, entry.getValue());
+                return entry.getValue();
             }
         }
-        // Try searching installed apps by label
-        try {
-            for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
-                String label = pm.getApplicationLabel(ai).toString();
-                if (label.equals(appName) || label.equalsIgnoreCase(appName)) {
-                    Drawable d = pm.getApplicationIcon(ai);
-                    iconCache.put(appName, d);
-                    return d;
-                }
-            }
-        } catch (Exception e) {}
-        // Try partial match (e.g. "TikTok" in "TikTok Lite")
-        try {
-            for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
-                String label = pm.getApplicationLabel(ai).toString();
-                if (label.contains(appName) || appName.contains(label)) {
-                    Drawable d = pm.getApplicationIcon(ai);
-                    iconCache.put(appName, d);
-                    return d;
-                }
-            }
-        } catch (Exception e) {}
         return null;
     }
 
