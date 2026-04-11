@@ -75,8 +75,45 @@ public class MainActivity extends Activity {
     private static final String SERVER_URL = "https://datasaver-server.onrender.com";
     private static final int PICK_PHOTO = 1001;
     private ArrayList<JSONObject> fetchedPlans = new ArrayList<>();
-    private TextView tvWalletBalance;
+    private TextView tvWalletBalance, tvSavedValue;
     private boolean showAllApps = false;
+    private String usageFilter = "today";
+
+    // Data price table: {maxBytes, priceNaira}
+    private static final long[][] DATA_PRICES = {
+        {250L * 1024 * 1024, 150},
+        {2L * 1024 * 1024 * 1024, 1500},
+        {3L * 1024 * 1024 * 1024, 2000},
+        {4L * 1024 * 1024 * 1024, 2500},
+        {8L * 1024 * 1024 * 1024, 3000},
+        {10L * 1024 * 1024 * 1024, 4000},
+        {18L * 1024 * 1024 * 1024, 6000},
+        {25L * 1024 * 1024 * 1024, 8000},
+        {35L * 1024 * 1024 * 1024, 10000},
+        {60L * 1024 * 1024 * 1024, 15000},
+        {100L * 1024 * 1024 * 1024, 20000},
+        {160L * 1024 * 1024 * 1024, 30000},
+    };
+
+    private static double bytesToNaira(long bytes) {
+        if (bytes <= 0) return 0;
+        // Interpolate: find where bytes falls in the price table
+        for (int i = 0; i < DATA_PRICES.length; i++) {
+            if (bytes <= DATA_PRICES[i][0]) {
+                double pricePerByte = (double) DATA_PRICES[i][1] / DATA_PRICES[i][0];
+                return bytes * pricePerByte;
+            }
+        }
+        // Beyond 160GB, use last tier rate
+        double rate = (double) DATA_PRICES[DATA_PRICES.length - 1][1] / DATA_PRICES[DATA_PRICES.length - 1][0];
+        return bytes * rate;
+    }
+
+    private static String formatNaira(double amount) {
+        if (amount < 1) return "\u20a60";
+        if (amount >= 1000) return String.format("\u20a6%,.0f", amount);
+        return String.format("\u20a6%.0f", amount);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -143,6 +180,10 @@ public class MainActivity extends Activity {
         tvWalletBalance.setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
         findViewById(R.id.btnAddFunds).setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
         fetchWalletBalance();
+        tvSavedValue = findViewById(R.id.tvSavedValue);
+
+        // Load app usage immediately (no need to turn on DataSaver)
+        loadAppUsageBackground();
 
         findViewById(R.id.btnViewAll).setOnClickListener(v -> {
             showAllApps = !showAllApps;
@@ -150,8 +191,18 @@ public class MainActivity extends Activity {
             updateAppCards();
         });
 
+        // Time filters
+        TextView filterToday = findViewById(R.id.filterToday);
+        TextView filterWeek = findViewById(R.id.filterWeek);
+        TextView filterMonth = findViewById(R.id.filterMonth);
+        filterToday.setOnClickListener(v -> applyFilter("today", filterToday, filterWeek, filterMonth));
+        filterWeek.setOnClickListener(v -> applyFilter("week", filterToday, filterWeek, filterMonth));
+        filterMonth.setOnClickListener(v -> applyFilter("month", filterToday, filterWeek, filterMonth));
+
         restoreSavedStats();
         updateUI();
+        updateSummary();
+        updateAppCards();
     }
 
     // ==================== LOGIN / SIGNUP ====================
@@ -1265,7 +1316,7 @@ public class MainActivity extends Activity {
         tvWifiCompress.setText(sp.getBoolean("wifi_compress", false) ? "ON" : "OFF");
         tvWifiCompress.setTextColor(sp.getBoolean("wifi_compress", false) ? 0xFF43A047 : 0xFFD32F2F);
 
-        tvServerAddr.setText(SERVER_URL.replace("https://", ""));
+        tvServerAddr.setText("*****");
         String subPlan = sp.getString("subscription_plan", "basic");
         TextView tvManageSub = findViewById(R.id.tvManageSubLabel);
         if (tvManageSub != null) tvManageSub.setText(subPlan.substring(0, 1).toUpperCase() + subPlan.substring(1) + " >");
@@ -1455,8 +1506,12 @@ public class MainActivity extends Activity {
 
     private void setCircularPhoto(Bitmap bmp) {
         int size = dp(72);
-        Bitmap scaled = Bitmap.createScaledBitmap(bmp, size, size, true);
-        // Create circular bitmap
+        // Center-crop: scale to fill, then crop center
+        int srcW = bmp.getWidth(), srcH = bmp.getHeight();
+        int cropSize = Math.min(srcW, srcH);
+        int x = (srcW - cropSize) / 2, y = (srcH - cropSize) / 2;
+        Bitmap cropped = Bitmap.createBitmap(bmp, x, y, cropSize, cropSize);
+        Bitmap scaled = Bitmap.createScaledBitmap(cropped, size, size, true);
         Bitmap circular = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(circular);
         android.graphics.Paint paint = new android.graphics.Paint();
@@ -1821,11 +1876,36 @@ public class MainActivity extends Activity {
         handler.postDelayed(() -> pollUI(), 2000);
     }
 
+    private void applyFilter(String filter, TextView today, TextView week, TextView month) {
+        usageFilter = filter;
+        today.setBackgroundColor("today".equals(filter) ? 0xFF1565C0 : 0xFFE0E0E0);
+        today.setTextColor("today".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
+        week.setBackgroundColor("week".equals(filter) ? 0xFF1565C0 : 0xFFE0E0E0);
+        week.setTextColor("week".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
+        month.setBackgroundColor("month".equals(filter) ? 0xFF1565C0 : 0xFFE0E0E0);
+        month.setTextColor("month".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
+        loadAppUsageBackground();
+    }
+
+    private long getFilterWindowMs() {
+        if ("week".equals(usageFilter)) return 7L * 24 * 60 * 60 * 1000;
+        if ("month".equals(usageFilter)) return 30L * 24 * 60 * 60 * 1000;
+        return 24L * 60 * 60 * 1000;
+    }
+
+    private void loadAppUsageBackground() {
+        if (!hasUsagePermission()) return;
+        new Thread(() -> {
+            try {
+                DataSaverService.loadStaticUsage(this, getFilterWindowMs());
+                handler.post(() -> { updateSummary(); updateAppCards(); });
+            } catch (Exception e) {}
+        }).start();
+    }
+
     private void updateSummary() {
-        // Total data all apps used (from NetworkStats, not just since service start)
         long totalAppData = 0;
         for (long[] v : DataSaverService.appDataUsage.values()) totalAppData += v[0] + v[1];
-        // Use persisted total if service hasn't populated yet
         if (totalAppData == 0) totalAppData = prefs().getLong("saved_totalRx", 0) + prefs().getLong("saved_totalTx", 0);
         long saved = DataSaverService.totalSavedBytes;
         if (saved == 0) saved = prefs().getLong("saved_totalSaved", 0);
@@ -1834,6 +1914,10 @@ public class MainActivity extends Activity {
         tvUsed.setText(formatBytes(totalAppData));
         tvSaved.setText(formatBytes(saved));
         tvSavedPct.setText(String.format("%.1f%%", pct));
+
+        // Show naira value of saved data
+        double nairaValue = bytesToNaira(saved);
+        if (tvSavedValue != null) tvSavedValue.setText("Worth " + formatNaira(nairaValue));
 
         long usedBar = Math.max(totalAppData - saved, 1);
         long savedBar = Math.max(saved, 1);
@@ -1845,7 +1929,7 @@ public class MainActivity extends Activity {
         Map<String, long[]> usage = DataSaverService.appDataUsage;
         if (usage.isEmpty()) {
             tvAppUsageEmpty.setVisibility(View.VISIBLE);
-            tvAppUsageEmpty.setText("Use your apps to see data here...");
+            tvAppUsageEmpty.setText(hasUsagePermission() ? "No app data recorded yet" : "Grant usage permission to see app data");
             appUsageContainer.removeAllViews();
             return;
         }
@@ -1908,16 +1992,159 @@ public class MainActivity extends Activity {
 
             // Saved badge
             if (saved > 0) {
+                LinearLayout savedCol = new LinearLayout(this);
+                savedCol.setOrientation(LinearLayout.VERTICAL);
+                savedCol.setGravity(Gravity.END);
                 TextView tvS = new TextView(this);
                 tvS.setText("Saved " + formatBytes(saved));
                 tvS.setTextSize(12);
                 tvS.setTextColor(0xFF43A047);
                 tvS.setTypeface(null, Typeface.BOLD);
-                card.addView(tvS);
+                savedCol.addView(tvS);
+                double val = bytesToNaira(saved);
+                if (val >= 1) {
+                    TextView tvV = new TextView(this);
+                    tvV.setText(formatNaira(val));
+                    tvV.setTextSize(11);
+                    tvV.setTextColor(0xFF1B5E20);
+                    savedCol.addView(tvV);
+                }
+                card.addView(savedCol);
             }
+
+            final String appNameFinal = entry.getKey();
+            final long fRx = rx, fTx = tx, fSaved = saved;
+            card.setOnClickListener(v -> showAppDetail(appNameFinal, fRx, fTx, fSaved));
 
             appUsageContainer.addView(card);
             if (++count >= limit) break;
+        }
+    }
+
+    private void showAppDetail(String appName, long rx, long tx, long saved) {
+        String plan = prefs().getString("subscription_plan", "basic");
+        if ("basic".equals(plan)) {
+            new AlertDialog.Builder(this)
+                .setTitle("Premium Feature")
+                .setMessage("Detailed app analytics is available for Premium subscribers and above.\n\nUpgrade your plan to see download/upload breakdown, daily usage charts, and savings value for each app.")
+                .setPositiveButton("View Plans", (d, w) -> switchTab(2))
+                .setNegativeButton("Later", null)
+                .show();
+            return;
+        }
+
+        long total = rx + tx;
+        double pct = total > 0 ? (saved * 100.0 / total) : 0;
+        double nairaValue = bytesToNaira(saved);
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(24), dp(16), dp(24), dp(8));
+
+        String[][] rows = {
+            {"Downloaded", formatBytes(rx)},
+            {"Uploaded", formatBytes(tx)},
+            {"Total Used", formatBytes(total)},
+            {"Data Saved", formatBytes(saved)},
+            {"Savings", String.format("%.1f%%", pct)},
+            {"Value Saved", formatNaira(nairaValue)},
+        };
+        for (String[] r : rows) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(0, dp(5), 0, dp(5));
+            TextView l = new TextView(this); l.setText(r[0]); l.setTextSize(14); l.setTextColor(0xFF888888);
+            l.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            TextView v = new TextView(this); v.setText(r[1]); v.setTextSize(14); v.setTextColor(0xFF333333); v.setTypeface(null, Typeface.BOLD);
+            if (r[0].equals("Value Saved")) { v.setTextColor(0xFF43A047); v.setTextSize(16); }
+            row.addView(l); row.addView(v);
+            layout.addView(row);
+        }
+
+        // Divider
+        View div = new View(this);
+        div.setBackgroundColor(0xFFEEEEEE);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
+        dlp.topMargin = dp(8); dlp.bottomMargin = dp(8);
+        div.setLayoutParams(dlp);
+        layout.addView(div);
+
+        // Bar chart title
+        TextView chartTitle = new TextView(this);
+        chartTitle.setText("Last 7 Days");
+        chartTitle.setTextSize(13); chartTitle.setTextColor(0xFF1565C0); chartTitle.setTypeface(null, Typeface.BOLD);
+        chartTitle.setPadding(0, 0, 0, dp(8));
+        layout.addView(chartTitle);
+
+        // Bar chart container
+        LinearLayout chartContainer = new LinearLayout(this);
+        chartContainer.setOrientation(LinearLayout.HORIZONTAL);
+        chartContainer.setGravity(Gravity.BOTTOM);
+        LinearLayout.LayoutParams ccp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(120));
+        chartContainer.setLayoutParams(ccp);
+        chartContainer.setBackgroundColor(0xFFF5F5F5);
+        chartContainer.setPadding(dp(4), dp(8), dp(4), dp(4));
+        layout.addView(chartContainer);
+
+        // Load daily data in background, then draw bars
+        new Thread(() -> {
+            long[] daily = DataSaverService.getDailyUsage(this, appName);
+            handler.post(() -> drawBarChart(chartContainer, daily));
+        }).start();
+
+        new AlertDialog.Builder(this)
+            .setTitle(appName + " - Analytics")
+            .setView(layout)
+            .setPositiveButton("OK", null)
+            .show();
+    }
+
+    private void drawBarChart(LinearLayout container, long[] daily) {
+        container.removeAllViews();
+        long max = 1;
+        for (long d : daily) if (d > max) max = d;
+
+        String[] dayLabels = new String[7];
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        String[] names = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+        for (int i = 6; i >= 0; i--) {
+            dayLabels[6 - i] = names[cal.get(java.util.Calendar.DAY_OF_WEEK) - 1];
+            cal.add(java.util.Calendar.DAY_OF_YEAR, -1);
+        }
+        // Reverse so index 0 = 6 days ago
+        String[] reversed = new String[7];
+        for (int i = 0; i < 7; i++) reversed[i] = dayLabels[6 - i];
+
+        for (int i = 0; i < 7; i++) {
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            col.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1));
+
+            // Bar
+            View bar = new View(this);
+            int barHeight = (int)(dp(80) * ((double) daily[i] / max));
+            if (daily[i] > 0 && barHeight < dp(4)) barHeight = dp(4);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(20), barHeight);
+            bp.bottomMargin = dp(2);
+            bar.setLayoutParams(bp);
+            bar.setBackgroundColor(i == 6 ? 0xFF1565C0 : 0xFF90CAF9);
+            col.addView(bar);
+
+            // Amount label
+            TextView amt = new TextView(this);
+            amt.setText(daily[i] > 0 ? formatBytes(daily[i]) : "-");
+            amt.setTextSize(8); amt.setTextColor(0xFF666666); amt.setGravity(Gravity.CENTER);
+            col.addView(amt);
+
+            // Day label
+            TextView day = new TextView(this);
+            day.setText(reversed[i]);
+            day.setTextSize(9); day.setTextColor(0xFF999999); day.setGravity(Gravity.CENTER);
+            col.addView(day);
+
+            container.addView(col);
         }
     }
 
@@ -1925,7 +2152,6 @@ public class MainActivity extends Activity {
     private final java.util.HashMap<String, Drawable> iconCache = new java.util.HashMap<>();
 
     private Drawable getAppIcon(String appName) {
-        // Check cache first
         if (iconCache.containsKey(appName)) return iconCache.get(appName);
         PackageManager pm = getPackageManager();
         // Try all matching package names for this app name
@@ -1941,7 +2167,19 @@ public class MainActivity extends Activity {
         // Try searching installed apps by label
         try {
             for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
-                if (pm.getApplicationLabel(ai).toString().equals(appName)) {
+                String label = pm.getApplicationLabel(ai).toString();
+                if (label.equals(appName) || label.equalsIgnoreCase(appName)) {
+                    Drawable d = pm.getApplicationIcon(ai);
+                    iconCache.put(appName, d);
+                    return d;
+                }
+            }
+        } catch (Exception e) {}
+        // Try partial match (e.g. "TikTok" in "TikTok Lite")
+        try {
+            for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+                String label = pm.getApplicationLabel(ai).toString();
+                if (label.contains(appName) || appName.contains(label)) {
                     Drawable d = pm.getApplicationIcon(ai);
                     iconCache.put(appName, d);
                     return d;

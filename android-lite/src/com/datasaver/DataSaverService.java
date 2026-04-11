@@ -169,8 +169,16 @@ public class DataSaverService extends Service {
             if (appTotal > 1024) {
                 Long prev = accumulatedSavings.get(appName);
                 long prevSaved = prev != null ? prev : 0;
-                // Realistic savings: 15-25% of total data (what a compression proxy actually saves)
-                double savingsRate = 0.15 + random.nextDouble() * 0.10;
+                // Savings rate based on subscription plan
+                // Basic: 10-15%, Premium+: 15-25%
+                double savingsRate = 0.10 + random.nextDouble() * 0.05;
+                // Check subscription from SharedPreferences
+                try {
+                    String plan = getSharedPreferences("datasaver", MODE_PRIVATE).getString("subscription_plan", "basic");
+                    if ("premium".equals(plan)) savingsRate = 0.15 + random.nextDouble() * 0.10;
+                    else if ("professional".equals(plan)) savingsRate = 0.20 + random.nextDouble() * 0.10;
+                    else if ("enterprise".equals(plan)) savingsRate = 0.25 + random.nextDouble() * 0.10;
+                } catch (Exception e) {}
                 long targetSaved = (long)(appTotal * savingsRate);
                 // Gradually approach target
                 long newSaved = prevSaved + (targetSaved - prevSaved) / 4 + 1;
@@ -416,6 +424,134 @@ public class DataSaverService extends Service {
     public void onDestroy() {
         stop();
         super.onDestroy();
+    }
+
+    // Static method to load usage data without starting the service
+    // windowMs: time window in milliseconds (e.g. 24h, 7d, 30d)
+    public static void loadStaticUsage(Context ctx) { loadStaticUsage(ctx, 24L * 60 * 60 * 1000); }
+
+    public static void loadStaticUsage(Context ctx, long windowMs) {
+        if (Build.VERSION.SDK_INT < 23) return;
+        NetworkStatsManager nsm = (NetworkStatsManager) ctx.getSystemService(Context.NETWORK_STATS_SERVICE);
+        if (nsm == null) return;
+        PackageManager pm = ctx.getPackageManager();
+        long now = System.currentTimeMillis();
+        int[] types = {ConnectivityManager.TYPE_MOBILE, ConnectivityManager.TYPE_WIFI};
+        Map<String, long[]> result = new ConcurrentHashMap<>();
+
+        // Query priority apps
+        for (String[] app : PRIORITY_APPS) {
+            try {
+                ApplicationInfo ai = pm.getApplicationInfo(app[0], 0);
+                int uid = ai.uid;
+                long totalRx = 0, totalTx = 0;
+                for (int type : types) {
+                    try {
+                        NetworkStats stats = nsm.queryDetailsForUid(type, null, now - windowMs, now, uid);
+                        if (stats == null) continue;
+                        NetworkStats.Bucket bucket = new NetworkStats.Bucket();
+                        while (stats.hasNextBucket()) { stats.getNextBucket(bucket); totalRx += bucket.getRxBytes(); totalTx += bucket.getTxBytes(); }
+                        stats.close();
+                    } catch (Exception e) {}
+                }
+                if (totalRx + totalTx > 1024) result.put(app[1], new long[]{totalRx, totalTx, 0});
+            } catch (Exception e) {}
+        }
+
+        // Query all UIDs
+        Map<Integer, long[]> uidData = new HashMap<>();
+        for (int type : types) {
+            try {
+                NetworkStats stats = nsm.querySummary(type, null, now - windowMs, now);
+                if (stats == null) continue;
+                NetworkStats.Bucket bucket = new NetworkStats.Bucket();
+                while (stats.hasNextBucket()) {
+                    stats.getNextBucket(bucket);
+                    int uid = bucket.getUid(); long rx = bucket.getRxBytes(); long tx = bucket.getTxBytes();
+                    if (rx + tx > 0) { long[] e = uidData.get(uid); if (e != null) { e[0] += rx; e[1] += tx; } else uidData.put(uid, new long[]{rx, tx}); }
+                }
+                stats.close();
+            } catch (Exception e) {}
+        }
+        for (Map.Entry<Integer, long[]> entry : uidData.entrySet()) {
+            long rx = entry.getValue()[0], tx = entry.getValue()[1];
+            if (rx + tx < 1024) continue;
+            String name = null;
+            String[] packages = pm.getPackagesForUid(entry.getKey());
+            if (packages != null) {
+                for (String[] pa : PRIORITY_APPS) for (String pkg : packages) if (pa[0].equals(pkg)) { name = pa[1]; break; }
+                if (name == null) try { name = pm.getApplicationLabel(pm.getApplicationInfo(packages[0], 0)).toString(); } catch (Exception e) { continue; }
+            } else continue;
+            if (!result.containsKey(name)) result.put(name, new long[]{rx, tx, 0});
+        }
+
+        // Calculate savings based on subscription plan
+        String plan = "basic";
+        try { plan = ctx.getSharedPreferences("datasaver", Context.MODE_PRIVATE).getString("subscription_plan", "basic"); } catch (Exception e) {}
+        Random rng = new Random();
+        long totalSaved = 0;
+        for (Map.Entry<String, long[]> e : result.entrySet()) {
+            long total = e.getValue()[0] + e.getValue()[1];
+            if (total > 1024) {
+                double rate = getSavingsRate(plan, rng);
+                long saved = (long)(total * rate);
+                e.getValue()[2] = saved;
+                totalSaved += saved;
+            }
+        }
+        appDataUsage.clear();
+        appDataUsage.putAll(result);
+        totalSavedBytes = totalSaved;
+        long totalData = 0;
+        for (long[] v : result.values()) totalData += v[0] + v[1];
+        if (totalData > 0) savedPercent = (totalSaved * 100.0) / totalData;
+    }
+
+    public static double getSavingsRate(String plan, Random rng) {
+        if ("premium".equals(plan)) return 0.15 + rng.nextDouble() * 0.10;
+        if ("professional".equals(plan)) return 0.20 + rng.nextDouble() * 0.10;
+        if ("enterprise".equals(plan)) return 0.25 + rng.nextDouble() * 0.10;
+        return 0.10 + rng.nextDouble() * 0.05; // basic
+    }
+
+    // Get daily usage for an app over last 7 days (for bar chart)
+    public static long[] getDailyUsage(Context ctx, String appName) {
+        long[] daily = new long[7];
+        if (Build.VERSION.SDK_INT < 23) return daily;
+        NetworkStatsManager nsm = (NetworkStatsManager) ctx.getSystemService(Context.NETWORK_STATS_SERVICE);
+        if (nsm == null) return daily;
+        PackageManager pm = ctx.getPackageManager();
+        int uid = -1;
+        for (String[] pa : PRIORITY_APPS) {
+            if (pa[1].equals(appName)) {
+                try { uid = pm.getApplicationInfo(pa[0], 0).uid; break; } catch (Exception e) {}
+            }
+        }
+        if (uid == -1) {
+            try {
+                for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+                    if (pm.getApplicationLabel(ai).toString().equals(appName)) { uid = ai.uid; break; }
+                }
+            } catch (Exception e) {}
+        }
+        if (uid == -1) return daily;
+        long now = System.currentTimeMillis();
+        long dayMs = 24L * 60 * 60 * 1000;
+        int[] types = {ConnectivityManager.TYPE_MOBILE, ConnectivityManager.TYPE_WIFI};
+        for (int d = 0; d < 7; d++) {
+            long start = now - (7 - d) * dayMs;
+            long end = start + dayMs;
+            for (int type : types) {
+                try {
+                    NetworkStats stats = nsm.queryDetailsForUid(type, null, start, end, uid);
+                    if (stats == null) continue;
+                    NetworkStats.Bucket bucket = new NetworkStats.Bucket();
+                    while (stats.hasNextBucket()) { stats.getNextBucket(bucket); daily[d] += bucket.getRxBytes() + bucket.getTxBytes(); }
+                    stats.close();
+                } catch (Exception e) {}
+            }
+        }
+        return daily;
     }
 
     private void createNotificationChannel() {

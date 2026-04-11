@@ -247,6 +247,15 @@
                             android:text="We Saved You"
                             android:textSize="11sp"
                             android:textColor="#888888" />
+
+                        <TextView
+                            android:id="@+id/tvSavedValue"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Worth \u20a60"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:textColor="#43A047" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -328,28 +337,76 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
+                android:orientation="vertical"
                 android:paddingLeft="16dp"
                 android:paddingRight="16dp"
                 android:paddingTop="16dp"
-                android:paddingBottom="8dp">
+                android:paddingBottom="4dp">
 
-                <TextView
-                    android:layout_width="0dp"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="App Data Usage"
-                    android:textSize="15sp"
-                    android:textStyle="bold"
-                    android:textColor="#333333" />
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="App Data Usage"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:textColor="#333333" />
+                    <TextView
+                        android:id="@+id/btnViewAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="View All >"
+                        android:textSize="13sp"
+                        android:textColor="#1565C0" />
+                </LinearLayout>
 
-                <TextView
-                    android:id="@+id/btnViewAll"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="View All >"
-                    android:textSize="13sp"
-                    android:textColor="#1565C0" />
+                <!-- Time Filters -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="32dp"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+                    <TextView
+                        android:id="@+id/filterToday"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:text="Today"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF"
+                        android:background="#1565C0"
+                        android:layout_marginRight="4dp" />
+                    <TextView
+                        android:id="@+id/filterWeek"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:text="This Week"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#666666"
+                        android:background="#E0E0E0"
+                        android:layout_marginRight="4dp" />
+                    <TextView
+                        android:id="@+id/filterMonth"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:text="This Month"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#666666"
+                        android:background="#E0E0E0" />
+                </LinearLayout>
             </LinearLayout>
 
             <!-- App Usage List (populated dynamically) -->
@@ -366,7 +423,7 @@
                 android:id="@+id/tvAppUsageEmpty"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Tap CONNECT to start monitoring apps"
+                android:text="Loading app data usage..."
                 android:textSize="13sp"
                 android:textColor="#999999"
                 android:gravity="center"
@@ -937,7 +994,7 @@
                 <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
                 <LinearLayout android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
                     <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Server Address" android:textSize="15sp" android:textColor="#333333" />
-                    <TextView android:id="@+id/tvServerAddr" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Render.com" android:textSize="13sp" android:textColor="#1565C0" />
+                    <TextView android:id="@+id/tvServerAddr" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="*****" android:textSize="13sp" android:textColor="#999999" />
                 </LinearLayout>
             </LinearLayout>
 
