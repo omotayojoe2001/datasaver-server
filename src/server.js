@@ -105,6 +105,14 @@ app.post('/api/buy-data', async (req, res) => {
     if (!userId && phone) {
       const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
       if (u) { userId = u.id; walletBal = parseFloat(u.wallet_balance || 0); }
+    } else if (userId) {
+      const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('id', userId).single();
+      if (u) walletBal = parseFloat(u.wallet_balance || 0);
+    }
+
+    // Check wallet balance
+    if (walletBal < parseFloat(plan.amount)) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + walletBal.toFixed(0) + ' but need \u20a6' + plan.amount });
     }
 
     // Create pending transaction
@@ -138,12 +146,16 @@ app.post('/api/buy-data', async (req, res) => {
         }
       });
 
+      // Debit wallet
+      await supabase.from('users').update({ wallet_balance: walletBal - parseFloat(plan.amount) }).eq('id', userId);
+      await supabase.from('wallet_transactions').insert({ user_id: userId, type: 'debit', amount: parseFloat(plan.amount), description: plan.size + ' ' + plan.network + ' data' });
+
       // Update transaction
       await supabase.from('transactions')
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
-      res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data });
+      res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(plan.amount) });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
       await supabase.from('transactions')
@@ -168,9 +180,18 @@ app.post('/api/buy-airtime', async (req, res) => {
   try {
     // Resolve user
     let userId = user_id || null;
+    let walletBal = 0;
     if (!userId && phone) {
-      const { data: u } = await supabase.from('users').select('id').eq('phone', phone).single();
-      if (u) userId = u.id;
+      const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
+      if (u) { userId = u.id; walletBal = parseFloat(u.wallet_balance || 0); }
+    } else if (userId) {
+      const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('id', userId).single();
+      if (u) walletBal = parseFloat(u.wallet_balance || 0);
+    }
+
+    // Check wallet balance
+    if (walletBal < parseFloat(amount)) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + walletBal.toFixed(0) + ' but need \u20a6' + amount });
     }
 
     // Create pending transaction
@@ -203,11 +224,15 @@ app.post('/api/buy-airtime', async (req, res) => {
         }
       });
 
+      // Debit wallet
+      await supabase.from('users').update({ wallet_balance: walletBal - parseFloat(amount) }).eq('id', userId);
+      await supabase.from('wallet_transactions').insert({ user_id: userId, type: 'debit', amount: parseFloat(amount), description: '\u20a6' + amount + ' ' + network + ' airtime' });
+
       await supabase.from('transactions')
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
-      res.json({ success: true, transaction_id: txn.id, message: 'N' + amount + ' airtime sent to ' + phone, api: apiRes.data });
+      res.json({ success: true, transaction_id: txn.id, message: 'N' + amount + ' airtime sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(amount) });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
       await supabase.from('transactions')
