@@ -432,6 +432,44 @@ app.get('/api/wallet/callback', async (req, res) => {
   }
 });
 
+// POST /api/wallet/webhook (Paystack sends payment events here)
+app.post('/api/wallet/webhook', async (req, res) => {
+  // Paystack sends a hash in the header to verify authenticity
+  const crypto = require('crypto');
+  const hash = crypto.createHmac('sha512', PAYSTACK_SECRET).update(JSON.stringify(req.body)).digest('hex');
+  if (hash !== req.headers['x-paystack-signature']) return res.sendStatus(400);
+
+  const event = req.body;
+  if (event.event === 'charge.success') {
+    const txn = event.data;
+    const amount = txn.amount / 100;
+    const phone = txn.metadata && txn.metadata.phone;
+    const email = txn.metadata && txn.metadata.email;
+    const ref = txn.reference;
+
+    try {
+      // Find user by phone or email
+      let user = null;
+      if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
+      if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', email).single(); user = u; }
+      if (!user) { console.log('Webhook: user not found for', phone, email); return res.sendStatus(200); }
+
+      // Check if already credited (prevent double credit)
+      const { data: existing } = await supabase.from('wallet_transactions').select('id').ilike('description', '%' + ref + '%').single();
+      if (existing) { console.log('Webhook: already credited ref', ref); return res.sendStatus(200); }
+
+      // Credit wallet
+      const newBal = parseFloat(user.wallet_balance || 0) + amount;
+      await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+      await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, description: 'Paystack top-up (ref: ' + ref + ')' });
+      console.log('Webhook: credited', amount, 'to user', user.id, 'ref', ref);
+    } catch (e) {
+      console.log('Webhook error:', e.message);
+    }
+  }
+  res.sendStatus(200);
+});
+
 // POST /api/wallet/verify  { reference }
 app.post('/api/wallet/verify', async (req, res) => {
   const { reference } = req.body;
