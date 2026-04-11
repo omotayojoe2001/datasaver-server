@@ -72,9 +72,9 @@ app.post('/api/register', async (req, res) => {
     const row = { phone, pin: pin || '0000' };
     if (name) row.name = name;
     if (email) row.email = email;
-    const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance').single();
+    const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan').single();
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, message: 'Account created' });
+    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'basic', message: 'Account created' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -86,13 +86,13 @@ app.post('/api/login', async (req, res) => {
   if ((!phone && !email) || !pin) return res.status(400).json({ error: 'Phone/email and PIN required' });
 
   try {
-    let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance');
+    let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at');
     if (phone) query = query.eq('phone', phone);
     else query = query.eq('email', email);
     const { data: user, error } = await query.single();
     if (error || !user) return res.status(404).json({ error: 'Account not found. Please sign up first.' });
     if (user.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
-    res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, message: 'Login successful' });
+    res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, subscription_plan: user.subscription_plan || 'basic', message: 'Login successful' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -102,10 +102,18 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/user/:phone', async (req, res) => {
   try {
     const { data, error } = await supabase.from('users')
-      .select('id, phone, name, email, wallet_balance, created_at')
+      .select('id, phone, name, email, wallet_balance, subscription_plan, subscription_expires_at, created_at')
       .eq('phone', req.params.phone)
       .single();
     if (error) return res.status(404).json({ error: 'User not found' });
+    // Check if subscription expired
+    if (data.subscription_plan && data.subscription_plan !== 'basic' && data.subscription_expires_at) {
+      if (new Date(data.subscription_expires_at) < new Date()) {
+        await supabase.from('users').update({ subscription_plan: 'basic', subscription_expires_at: null }).eq('id', data.id);
+        data.subscription_plan = 'basic';
+        data.subscription_expires_at = null;
+      }
+    }
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -290,6 +298,69 @@ app.get('/api/transactions/:phone', async (req, res) => {
       .limit(50);
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// SUBSCRIPTIONS
+// ============================================
+
+const PLAN_CONFIG = {
+  premium:      { amount: 500,   duration: '7 days',  ms: 7 * 24 * 60 * 60 * 1000 },
+  professional: { amount: 1500,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000 },
+  enterprise:   { amount: 5000,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000 }
+};
+
+// POST /api/subscribe  { phone, plan }
+app.post('/api/subscribe', async (req, res) => {
+  const { phone, plan } = req.body;
+  if (!phone || !plan) return res.status(400).json({ error: 'phone and plan required' });
+  const cfg = PLAN_CONFIG[plan];
+  if (!cfg) return res.status(400).json({ error: 'Invalid plan. Choose premium, professional, or enterprise' });
+
+  try {
+    const { data: user } = await supabase.from('users').select('id, wallet_balance, subscription_plan').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const bal = parseFloat(user.wallet_balance || 0);
+    if (bal < cfg.amount) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + bal.toFixed(0) + ' but need \u20a6' + cfg.amount });
+    }
+
+    const expiresAt = new Date(Date.now() + cfg.ms).toISOString();
+    const newBal = bal - cfg.amount;
+
+    // Update user
+    await supabase.from('users').update({ subscription_plan: plan, subscription_expires_at: expiresAt, wallet_balance: newBal }).eq('id', user.id);
+
+    // Log subscription
+    await supabase.from('subscriptions').insert({ user_id: user.id, plan, amount: cfg.amount, duration: cfg.duration, expires_at: expiresAt });
+
+    // Log wallet debit
+    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'debit', amount: cfg.amount, description: plan.charAt(0).toUpperCase() + plan.slice(1) + ' subscription (' + cfg.duration + ')' });
+
+    res.json({ success: true, plan, expires_at: expiresAt, wallet_balance: newBal, message: 'Subscribed to ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/subscription/:phone
+app.get('/api/subscription/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id, subscription_plan, subscription_expires_at').eq('phone', req.params.phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    // Check expiry
+    let plan = user.subscription_plan || 'basic';
+    let expires = user.subscription_expires_at;
+    if (plan !== 'basic' && expires && new Date(expires) < new Date()) {
+      await supabase.from('users').update({ subscription_plan: 'basic', subscription_expires_at: null }).eq('id', user.id);
+      plan = 'basic';
+      expires = null;
+    }
+    res.json({ plan, expires_at: expires });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
