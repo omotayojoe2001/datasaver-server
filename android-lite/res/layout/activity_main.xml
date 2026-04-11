@@ -156,6 +156,20 @@
                         android:textSize="16sp"
                         android:textStyle="bold"
                         android:textColor="#FFFFFF" />
+                    <TextView
+                        android:id="@+id/btnAddFunds"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="+ Add Funds"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF"
+                        android:background="#43A047"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:layout_marginLeft="8dp" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -652,77 +666,22 @@
                 android:textStyle="bold"
                 android:textColor="#FFFFFF" />
             <TextView
+                android:id="@+id/tvCurrentPlanHeader"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Choose a plan that fits your needs"
+                android:text="Current Plan: Basic (Free)"
                 android:textSize="13sp"
                 android:textColor="#B3FFFFFF"
                 android:layout_marginTop="4dp" />
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/subsPlansContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="16dp" />
 
-            <!-- Basic Plan -->
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:padding="16dp" android:layout_marginBottom="12dp" android:elevation="2dp">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Basic" android:textSize="18sp" android:textStyle="bold" android:textColor="#333333" />
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="FREE" android:textSize="18sp" android:textStyle="bold" android:textColor="#43A047" />
-                </LinearLayout>
-                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#EEEEEE" android:layout_marginTop="8dp" android:layout_marginBottom="8dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Image compression (up to 30%)" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Text/HTML gzip compression" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Basic data monitoring" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✗  Per-app optimization" android:textSize="13sp" android:textColor="#BBBBBB" android:layout_marginBottom="8dp" />
-                <Button android:layout_width="match_parent" android:layout_height="44dp" android:text="CURRENT PLAN" android:textSize="13sp" android:textColor="#FFFFFF" android:background="#43A047" />
-            </LinearLayout>
-
-            <!-- Premium Plan -->
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:padding="16dp" android:layout_marginBottom="12dp" android:elevation="2dp">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Premium" android:textSize="18sp" android:textStyle="bold" android:textColor="#333333" />
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₦500/mo" android:textSize="18sp" android:textStyle="bold" android:textColor="#1565C0" />
-                </LinearLayout>
-                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#EEEEEE" android:layout_marginTop="8dp" android:layout_marginBottom="8dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Everything in Basic" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Advanced image compression (up to 60%)" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Per-app data optimization" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Priority server access" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="8dp" />
-                <Button android:layout_width="match_parent" android:layout_height="44dp" android:text="SUBSCRIBE" android:textSize="13sp" android:textColor="#FFFFFF" android:background="#1565C0" />
-            </LinearLayout>
-
-            <!-- Professional Plan -->
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:padding="16dp" android:layout_marginBottom="12dp" android:elevation="2dp">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Professional" android:textSize="18sp" android:textStyle="bold" android:textColor="#333333" />
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₦1,500/mo" android:textSize="18sp" android:textStyle="bold" android:textColor="#1565C0" />
-                </LinearLayout>
-                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#EEEEEE" android:layout_marginTop="8dp" android:layout_marginBottom="8dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Everything in Premium" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Video compression (up to 40%)" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Ad blocking saves extra data" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Detailed analytics dashboard" android:textSize="13sp" android:textColor="#555555" android:layout_marginBottom="8dp" />
-                <Button android:layout_width="match_parent" android:layout_height="44dp" android:text="SUBSCRIBE" android:textSize="13sp" android:textColor="#FFFFFF" android:background="#1565C0" />
-            </LinearLayout>
-
-            <!-- Enterprise Plan -->
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#1565C0" android:padding="16dp" android:layout_marginBottom="12dp" android:elevation="4dp">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Enterprise" android:textSize="18sp" android:textStyle="bold" android:textColor="#FFFFFF" />
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="₦5,000/mo" android:textSize="18sp" android:textStyle="bold" android:textColor="#FFFFFF" />
-                </LinearLayout>
-                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#2979FF" android:layout_marginTop="8dp" android:layout_marginBottom="8dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Everything in Professional" android:textSize="13sp" android:textColor="#E3F2FD" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Unlimited compression bandwidth" android:textSize="13sp" android:textColor="#E3F2FD" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  Multi-device support (up to 5)" android:textSize="13sp" android:textColor="#E3F2FD" android:layout_marginBottom="4dp" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="✓  24/7 priority support" android:textSize="13sp" android:textColor="#E3F2FD" android:layout_marginBottom="8dp" />
-                <Button android:layout_width="match_parent" android:layout_height="44dp" android:text="SUBSCRIBE" android:textSize="13sp" android:textColor="#1565C0" android:background="#FFFFFF" />
-            </LinearLayout>
-
-        </LinearLayout>
     </LinearLayout>
 </ScrollView>
 
@@ -888,7 +847,7 @@
                 android:textSize="28sp"
                 android:textStyle="bold"
                 android:textColor="#1565C0"
-                android:background="#FFFFFF"
+                android:background="@drawable/circle_white"
                 android:layout_marginBottom="10dp" />
             <TextView
                 android:id="@+id/tvProfileName"
@@ -930,7 +889,20 @@
                 <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
                 <LinearLayout android:id="@+id/rowManageSub" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
                     <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Manage Subscription" android:textSize="15sp" android:textColor="#333333" />
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Basic >" android:textSize="13sp" android:textColor="#1565C0" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:id="@+id/tvManageSubLabel" android:text="Basic >" android:textSize="13sp" android:textColor="#1565C0" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Wallet -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Wallet" android:textSize="13sp" android:textColor="#999999" android:layout_marginBottom="8dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:elevation="2dp" android:layout_marginBottom="16dp">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="60dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Balance" android:textSize="12sp" android:textColor="#999999" />
+                        <TextView android:id="@+id/tvProfileWallet" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="\u20a60" android:textSize="20sp" android:textStyle="bold" android:textColor="#1B5E20" />
+                    </LinearLayout>
+                    <TextView android:id="@+id/btnProfileAddFunds" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="+ Add Funds" android:textSize="13sp" android:textStyle="bold" android:textColor="#FFFFFF" android:background="#43A047" android:paddingLeft="14dp" android:paddingRight="14dp" android:paddingTop="8dp" android:paddingBottom="8dp" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -1032,20 +1004,106 @@
                 android:textSize="14sp"
                 android:textColor="#B3FFFFFF"
                 android:layout_marginTop="8dp" />
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Login or create a new account"
-                android:textSize="12sp"
-                android:textColor="#80FFFFFF"
-                android:layout_marginTop="4dp" />
         </LinearLayout>
 
+        <!-- Login/Signup Toggle -->
         <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:background="#E0E0E0"
+            android:padding="3dp"
+            android:layout_marginLeft="24dp"
+            android:layout_marginRight="24dp"
+            android:layout_marginTop="16dp">
+            <TextView
+                android:id="@+id/tabLogin"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Login"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#1565C0" />
+            <TextView
+                android:id="@+id/tabSignup"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Sign Up"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#666666"
+                android:background="#00000000" />
+        </LinearLayout>
+
+        <!-- LOGIN FORM -->
+        <LinearLayout
+            android:id="@+id/loginForm"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:padding="24dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Email or Phone Number"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/loginIdentity"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your email or phone"
+                android:inputType="textEmailAddress"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="PIN"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/loginPinField"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your 4-digit PIN"
+                android:inputType="numberPassword"
+                android:maxLength="4"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/btnDoLogin"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:text="LOGIN"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#1565C0" />
+        </LinearLayout>
+
+        <!-- SIGNUP FORM -->
+        <LinearLayout
+            android:id="@+id/signupForm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="24dp"
+            android:visibility="gone">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -1055,7 +1113,7 @@
                 android:textColor="#666666"
                 android:layout_marginBottom="4dp" />
             <EditText
-                android:id="@+id/loginName"
+                android:id="@+id/signupName"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:hint="Enter your name"
@@ -1067,12 +1125,30 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Phone Number"
+                android:text="Email Address *"
                 android:textSize="13sp"
                 android:textColor="#666666"
                 android:layout_marginBottom="4dp" />
             <EditText
-                android:id="@+id/loginPhone"
+                android:id="@+id/signupEmail"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your email"
+                android:inputType="textEmailAddress"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Phone Number (optional)"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/signupPhone"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:hint="e.g. 08012345678"
@@ -1085,12 +1161,12 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="PIN (4 digits)"
+                android:text="Create PIN (4 digits)"
                 android:textSize="13sp"
                 android:textColor="#666666"
                 android:layout_marginBottom="4dp" />
             <EditText
-                android:id="@+id/loginPin"
+                android:id="@+id/signupPin"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:hint="Create a 4-digit PIN"
@@ -1099,47 +1175,69 @@
                 android:background="#FFFFFF"
                 android:padding="12dp"
                 android:textSize="15sp"
-                android:layout_marginBottom="16dp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Email (optional)"
-                android:textSize="13sp"
-                android:textColor="#666666"
-                android:layout_marginBottom="4dp" />
-            <EditText
-                android:id="@+id/loginEmail"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:hint="Enter your email"
-                android:inputType="textEmailAddress"
-                android:background="#FFFFFF"
-                android:padding="12dp"
-                android:textSize="15sp"
                 android:layout_marginBottom="24dp" />
 
             <Button
-                android:id="@+id/btnLogin"
+                android:id="@+id/btnDoSignup"
                 android:layout_width="match_parent"
                 android:layout_height="50dp"
-                android:text="LOGIN / SIGN UP"
+                android:text="CREATE ACCOUNT"
                 android:textSize="15sp"
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
                 android:background="#1565C0" />
-
-            <TextView
-                android:id="@+id/tvLoginStatus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center"
-                android:textSize="13sp"
-                android:textColor="#D32F2F"
-                android:layout_marginTop="12dp"
-                android:visibility="gone" />
         </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvLoginStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:textSize="13sp"
+            android:textColor="#D32F2F"
+            android:paddingLeft="24dp"
+            android:paddingRight="24dp"
+            android:layout_marginTop="4dp"
+            android:visibility="gone" />
     </LinearLayout>
 </ScrollView>
+
+<!-- PAYSTACK WEBVIEW OVERLAY -->
+<LinearLayout
+    android:id="@+id/paystackOverlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:paddingLeft="12dp"
+        android:paddingRight="12dp">
+        <TextView
+            android:id="@+id/btnClosePaystack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="X  Close"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF" />
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Secure Payment"
+            android:textSize="15sp"
+            android:textColor="#FFFFFF"
+            android:gravity="center" />
+    </LinearLayout>
+    <android.webkit.WebView
+        android:id="@+id/paystackWebView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+</LinearLayout>
 
 </RelativeLayout>

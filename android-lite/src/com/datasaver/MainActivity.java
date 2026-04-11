@@ -29,6 +29,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -138,6 +140,8 @@ public class MainActivity extends Activity {
         initProfileTab();
         initLogin();
         tvWalletBalance = findViewById(R.id.tvWalletBalance);
+        tvWalletBalance.setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
+        findViewById(R.id.btnAddFunds).setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
         fetchWalletBalance();
 
         findViewById(R.id.btnViewAll).setOnClickListener(v -> {
@@ -150,43 +154,112 @@ public class MainActivity extends Activity {
         updateUI();
     }
 
-    // ==================== LOGIN ====================
+    // ==================== LOGIN / SIGNUP ====================
 
     private ScrollView loginOverlay;
+    private LinearLayout loginForm, signupForm, paystackOverlay;
+    private WebView paystackWebView;
+    private boolean isSignupMode = false;
 
     private void initLogin() {
         loginOverlay = findViewById(R.id.loginOverlay);
+        loginForm = findViewById(R.id.loginForm);
+        signupForm = findViewById(R.id.signupForm);
+        paystackOverlay = findViewById(R.id.paystackOverlay);
+        paystackWebView = findViewById(R.id.paystackWebView);
+
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) {
             loginOverlay.setVisibility(View.VISIBLE);
         }
 
-        Button btnLogin = findViewById(R.id.btnLogin);
+        TextView tabLogin = findViewById(R.id.tabLogin);
+        TextView tabSignup = findViewById(R.id.tabSignup);
+        tabLogin.setOnClickListener(v -> switchAuthTab(false, tabLogin, tabSignup));
+        tabSignup.setOnClickListener(v -> switchAuthTab(true, tabLogin, tabSignup));
+
         TextView tvLoginStatus = findViewById(R.id.tvLoginStatus);
-        btnLogin.setOnClickListener(v -> {
-            String name = ((EditText) findViewById(R.id.loginName)).getText().toString().trim();
-            String ph = ((EditText) findViewById(R.id.loginPhone)).getText().toString().trim();
-            String pin = ((EditText) findViewById(R.id.loginPin)).getText().toString().trim();
 
-            String email = ((EditText) findViewById(R.id.loginEmail)).getText().toString().trim();
+        // LOGIN button
+        findViewById(R.id.btnDoLogin).setOnClickListener(v -> {
+            String identity = ((EditText) findViewById(R.id.loginIdentity)).getText().toString().trim();
+            String pin = ((EditText) findViewById(R.id.loginPinField)).getText().toString().trim();
+            if (identity.isEmpty()) { showAuthError(tvLoginStatus, "Enter your email or phone number"); return; }
+            if (pin.length() < 4) { showAuthError(tvLoginStatus, "Enter your 4-digit PIN"); return; }
 
-            if (name.isEmpty()) { tvLoginStatus.setText("Enter your name"); tvLoginStatus.setVisibility(View.VISIBLE); return; }
-            if (ph.length() < 10) { tvLoginStatus.setText("Enter a valid phone number"); tvLoginStatus.setVisibility(View.VISIBLE); return; }
-            if (pin.length() < 4) { tvLoginStatus.setText("Enter a 4-digit PIN"); tvLoginStatus.setVisibility(View.VISIBLE); return; }
+            ((Button) v).setEnabled(false);
+            ((Button) v).setText("Logging in...");
+            tvLoginStatus.setVisibility(View.GONE);
 
-            btnLogin.setEnabled(false);
-            btnLogin.setText("Please wait...");
-            tvLoginStatus.setText("Connecting...");
-            tvLoginStatus.setTextColor(0xFF999999);
-            tvLoginStatus.setVisibility(View.VISIBLE);
+            new Thread(() -> {
+                try {
+                    URL url = new URL(SERVER_URL + "/api/login");
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setConnectTimeout(15000);
+                    conn.setReadTimeout(15000);
+                    conn.setDoOutput(true);
+                    JSONObject body = new JSONObject();
+                    if (identity.contains("@")) body.put("email", identity);
+                    else body.put("phone", identity);
+                    body.put("pin", pin);
+                    OutputStream os = conn.getOutputStream();
+                    os.write(body.toString().getBytes());
+                    os.close();
+                    int code = conn.getResponseCode();
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(
+                        code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+                    JSONObject res = new JSONObject(sb.toString());
+                    handler.post(() -> {
+                        ((Button) v).setEnabled(true);
+                        ((Button) v).setText("LOGIN");
+                        if (code < 400 && res.optBoolean("success")) {
+                            String rName = res.isNull("name") ? "" : res.optString("name", "");
+                            String rEmail = res.isNull("email") ? "" : res.optString("email", "");
+                            prefs().edit()
+                                .putString("user_id", res.optString("user_id"))
+                                .putString("name", rName)
+                                .putString("phone", res.optString("phone", ""))
+                                .putString("email", rEmail)
+                                .putString("subscription_plan", res.optString("subscription_plan", "basic"))
+                                .apply();
+                            loginOverlay.setVisibility(View.GONE);
+                            refreshProfileUI();
+                            fetchWalletBalance();
+                            String welcome = rName.isEmpty() ? "User" : rName;
+                            Toast.makeText(this, "Welcome back, " + welcome + "!", Toast.LENGTH_SHORT).show();
+                        } else {
+                            showAuthError(tvLoginStatus, res.optString("error", "Login failed"));
+                        }
+                    });
+                } catch (Exception e) {
+                    handler.post(() -> {
+                        ((Button) v).setEnabled(true);
+                        ((Button) v).setText("LOGIN");
+                        showAuthError(tvLoginStatus, "Connection failed. Check your internet.");
+                    });
+                }
+            }).start();
+        });
 
-            // Save locally first so app works immediately
-            prefs().edit()
-                .putString("name", name)
-                .putString("phone", ph)
-                .putString("password", pin)
-                .putString("email", email)
-                .apply();
+        // SIGNUP button
+        findViewById(R.id.btnDoSignup).setOnClickListener(v -> {
+            String name = ((EditText) findViewById(R.id.signupName)).getText().toString().trim();
+            String ph = ((EditText) findViewById(R.id.signupPhone)).getText().toString().trim();
+            String email = ((EditText) findViewById(R.id.signupEmail)).getText().toString().trim();
+            String pin = ((EditText) findViewById(R.id.signupPin)).getText().toString().trim();
+            if (name.isEmpty()) { showAuthError(tvLoginStatus, "Enter your name"); return; }
+            if (email.isEmpty() || !email.contains("@")) { showAuthError(tvLoginStatus, "Enter a valid email address"); return; }
+            if (pin.length() < 4) { showAuthError(tvLoginStatus, "Create a 4-digit PIN"); return; }
+
+            ((Button) v).setEnabled(false);
+            ((Button) v).setText("Creating account...");
+            tvLoginStatus.setVisibility(View.GONE);
 
             new Thread(() -> {
                 try {
@@ -198,12 +271,13 @@ public class MainActivity extends Activity {
                     conn.setReadTimeout(15000);
                     conn.setDoOutput(true);
                     JSONObject body = new JSONObject();
-                    body.put("phone", ph);
+                    body.put("email", email);
                     body.put("pin", pin);
+                    body.put("name", name);
+                    if (!ph.isEmpty()) body.put("phone", ph);
                     OutputStream os = conn.getOutputStream();
                     os.write(body.toString().getBytes());
                     os.close();
-
                     int code = conn.getResponseCode();
                     BufferedReader reader = new BufferedReader(new InputStreamReader(
                         code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
@@ -212,26 +286,82 @@ public class MainActivity extends Activity {
                     while ((line = reader.readLine()) != null) sb.append(line);
                     reader.close();
                     JSONObject res = new JSONObject(sb.toString());
-
-                    if (code < 400 && res.has("user_id")) {
-                        prefs().edit().putString("user_id", res.optString("user_id")).apply();
-                    }
                     handler.post(() -> {
-                        loginOverlay.setVisibility(View.GONE);
-                        refreshProfileUI();
-                        fetchWalletBalance();
-                        Toast.makeText(this, "Welcome, " + name + "!", Toast.LENGTH_SHORT).show();
+                        ((Button) v).setEnabled(true);
+                        ((Button) v).setText("CREATE ACCOUNT");
+                        if (code < 400 && res.optBoolean("success")) {
+                            prefs().edit()
+                                .putString("user_id", res.optString("user_id"))
+                                .putString("name", name)
+                                .putString("phone", ph)
+                                .putString("email", email)
+                                .putString("password", pin)
+                                .apply();
+                            loginOverlay.setVisibility(View.GONE);
+                            refreshProfileUI();
+                            fetchWalletBalance();
+                            Toast.makeText(this, "Welcome, " + name + "!", Toast.LENGTH_SHORT).show();
+                        } else {
+                            showAuthError(tvLoginStatus, res.optString("error", "Registration failed"));
+                        }
                     });
                 } catch (Exception e) {
-                    // Server failed but local save worked — let them in
                     handler.post(() -> {
-                        loginOverlay.setVisibility(View.GONE);
-                        refreshProfileUI();
-                        Toast.makeText(this, "Welcome, " + name + "! (offline mode)", Toast.LENGTH_SHORT).show();
+                        ((Button) v).setEnabled(true);
+                        ((Button) v).setText("CREATE ACCOUNT");
+                        showAuthError(tvLoginStatus, "Connection failed. Check your internet.");
                     });
                 }
             }).start();
         });
+
+        // Paystack WebView setup
+        paystackWebView.getSettings().setJavaScriptEnabled(true);
+        paystackWebView.getSettings().setDomStorageEnabled(true);
+        paystackWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (url.contains("/api/wallet/callback")) {
+                    paystackOverlay.setVisibility(View.GONE);
+                    fetchWalletBalance();
+                    verifyPendingPayment();
+                    Toast.makeText(MainActivity.this, "Payment processing...", Toast.LENGTH_SHORT).show();
+                    return true;
+                }
+                return false;
+            }
+        });
+        findViewById(R.id.btnClosePaystack).setOnClickListener(v -> {
+            paystackOverlay.setVisibility(View.GONE);
+            fetchWalletBalance();
+            verifyPendingPayment();
+        });
+    }
+
+    private void switchAuthTab(boolean signup, TextView tabLogin, TextView tabSignup) {
+        isSignupMode = signup;
+        if (signup) {
+            tabSignup.setBackgroundColor(0xFF1565C0);
+            tabSignup.setTextColor(0xFFFFFFFF);
+            tabLogin.setBackgroundColor(0x00000000);
+            tabLogin.setTextColor(0xFF666666);
+            loginForm.setVisibility(View.GONE);
+            signupForm.setVisibility(View.VISIBLE);
+        } else {
+            tabLogin.setBackgroundColor(0xFF1565C0);
+            tabLogin.setTextColor(0xFFFFFFFF);
+            tabSignup.setBackgroundColor(0x00000000);
+            tabSignup.setTextColor(0xFF666666);
+            loginForm.setVisibility(View.VISIBLE);
+            signupForm.setVisibility(View.GONE);
+        }
+        findViewById(R.id.tvLoginStatus).setVisibility(View.GONE);
+    }
+
+    private void showAuthError(TextView tv, String msg) {
+        tv.setText(msg);
+        tv.setTextColor(0xFFD32F2F);
+        tv.setVisibility(View.VISIBLE);
     }
 
     private void fetchWalletBalance() {
@@ -362,6 +492,9 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    private String selectedPlanCategory = "Daily";
+    private LinearLayout dataCategoryTabs;
+
     private void showDataPlans(ArrayList<JSONObject> plans) {
         dataPlansContainer.removeAllViews();
         fetchedPlans = plans;
@@ -372,37 +505,76 @@ public class MainActivity extends Activity {
         }
         tvSelectNetwork.setVisibility(View.GONE);
 
-        // Group plans by category based on validity
-        ArrayList<JSONObject> daily = new ArrayList<>();
-        ArrayList<JSONObject> weekly = new ArrayList<>();
-        ArrayList<JSONObject> monthly = new ArrayList<>();
-        ArrayList<JSONObject> special = new ArrayList<>();
+        // Add category tabs
+        if (dataCategoryTabs == null) {
+            dataCategoryTabs = new LinearLayout(this);
+            dataCategoryTabs.setOrientation(LinearLayout.HORIZONTAL);
+            dataCategoryTabs.setPadding(0, 0, 0, dp(8));
+        }
+        dataCategoryTabs.removeAllViews();
+        String[] cats = {"Daily", "Weekly", "Monthly", "Special"};
+        for (String cat : cats) {
+            TextView tab = new TextView(this);
+            tab.setText(cat);
+            tab.setTextSize(13);
+            tab.setPadding(dp(14), dp(8), dp(14), dp(8));
+            tab.setTypeface(null, Typeface.BOLD);
+            if (cat.equals(selectedPlanCategory)) {
+                tab.setBackgroundColor(0xFF1565C0);
+                tab.setTextColor(0xFFFFFFFF);
+            } else {
+                tab.setBackgroundColor(0xFFE0E0E0);
+                tab.setTextColor(0xFF666666);
+            }
+            LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+            tp.rightMargin = dp(2);
+            tab.setLayoutParams(tp);
+            tab.setGravity(Gravity.CENTER);
+            tab.setOnClickListener(v -> {
+                selectedPlanCategory = cat;
+                showDataPlans(fetchedPlans);
+            });
+            dataCategoryTabs.addView(tab);
+        }
+        dataPlansContainer.addView(dataCategoryTabs);
 
-        for (int i = 0; i < plans.size(); i++) {
+        // Filter plans by selected category
+        ArrayList<JSONObject> filtered = new ArrayList<>();
+        for (JSONObject p : plans) {
             try {
-                JSONObject p = plans.get(i);
                 String v = p.getString("validity").toLowerCase();
-                if (v.contains("1 day") || v.contains("2 day") || v.contains("3 day")) daily.add(p);
-                else if (v.contains("7 day") || v.contains("7day")) weekly.add(p);
-                else if (v.contains("30") || v.contains("month")) monthly.add(p);
-                else special.add(p);
+                boolean match = false;
+                if ("Daily".equals(selectedPlanCategory)) match = v.contains("1 day") || v.contains("2 day") || v.contains("3 day");
+                else if ("Weekly".equals(selectedPlanCategory)) match = v.contains("7 day") || v.contains("7day");
+                else if ("Monthly".equals(selectedPlanCategory)) match = v.contains("30") || v.contains("month");
+                else match = !(v.contains("1 day") || v.contains("2 day") || v.contains("3 day") || v.contains("7 day") || v.contains("7day") || v.contains("30") || v.contains("month"));
+                if (match) filtered.add(p);
             } catch (Exception e) {}
         }
 
-        if (!daily.isEmpty()) addPlanSection("Daily Plans", daily);
-        if (!weekly.isEmpty()) addPlanSection("Weekly Plans", weekly);
-        if (!monthly.isEmpty()) addPlanSection("Monthly Plans", monthly);
-        if (!special.isEmpty()) addPlanSection("Special Plans", special);
+        if (filtered.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("No " + selectedPlanCategory.toLowerCase() + " plans available");
+            empty.setTextSize(13);
+            empty.setTextColor(0xFF999999);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(0, dp(20), 0, dp(20));
+            dataPlansContainer.addView(empty);
+        } else {
+            addPlanSection(null, filtered);
+        }
     }
 
     private void addPlanSection(String title, ArrayList<JSONObject> plans) {
-        TextView header = new TextView(this);
-        header.setText(title);
-        header.setTextSize(14);
-        header.setTextColor(0xFF1565C0);
-        header.setTypeface(null, Typeface.BOLD);
-        header.setPadding(0, dp(12), 0, dp(8));
-        dataPlansContainer.addView(header);
+        if (title != null) {
+            TextView header = new TextView(this);
+            header.setText(title);
+            header.setTextSize(14);
+            header.setTextColor(0xFF1565C0);
+            header.setTypeface(null, Typeface.BOLD);
+            header.setPadding(0, dp(12), 0, dp(8));
+            dataPlansContainer.addView(header);
+        }
 
         for (JSONObject plan : plans) {
             try {
@@ -543,8 +715,12 @@ public class MainActivity extends Activity {
                             isData ? value : ("\u20a6" + value));
                         fetchWalletBalance();
                     } else {
-                        showReceiptDialog(false, res.optString("error", "Unknown error"),
-                            phone, network, isData ? "Data" : "Airtime", "");
+                        String err = res.optString("error", "Unknown error");
+                        if (err.contains("Insufficient wallet")) {
+                            showTopUpPrompt(err);
+                        } else {
+                            showReceiptDialog(false, err, phone, network, isData ? "Data" : "Airtime", "");
+                        }
                     }
                 });
             } catch (Exception e) {
@@ -618,6 +794,174 @@ public class MainActivity extends Activity {
 
     // ==================== HISTORY TAB ====================
 
+    private void showTopUpPrompt(String message) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(24), dp(20), dp(24), dp(8));
+        layout.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        TextView tvMsg = new TextView(this);
+        tvMsg.setText(message);
+        tvMsg.setTextSize(15);
+        tvMsg.setTextColor(0xFFD32F2F);
+        tvMsg.setGravity(Gravity.CENTER);
+        tvMsg.setPadding(0, 0, 0, dp(16));
+        layout.addView(tvMsg);
+
+        TextView tvHint = new TextView(this);
+        tvHint.setText("Enter amount to add to your wallet");
+        tvHint.setTextSize(13);
+        tvHint.setTextColor(0xFF666666);
+        layout.addView(tvHint);
+
+        EditText etAmt = new EditText(this);
+        etAmt.setHint("Amount (e.g. 1000)");
+        etAmt.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etAmt.setPadding(dp(12), dp(10), dp(12), dp(10));
+        etAmt.setBackgroundColor(0xFFF5F5F5);
+        layout.addView(etAmt);
+
+        // Quick amount buttons
+        LinearLayout quickRow = new LinearLayout(this);
+        quickRow.setOrientation(LinearLayout.HORIZONTAL);
+        quickRow.setPadding(0, dp(10), 0, 0);
+        int[] quickAmts = {500, 1000, 2000, 5000};
+        for (int a : quickAmts) {
+            TextView btn = new TextView(this);
+            btn.setText("\u20a6" + a);
+            btn.setTextSize(12);
+            btn.setTextColor(0xFF1565C0);
+            btn.setTypeface(null, Typeface.BOLD);
+            btn.setGravity(Gravity.CENTER);
+            btn.setPadding(dp(8), dp(6), dp(8), dp(6));
+            btn.setBackgroundColor(0xFFE3F2FD);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+            bp.rightMargin = dp(4);
+            btn.setLayoutParams(bp);
+            btn.setOnClickListener(v -> etAmt.setText(String.valueOf(a)));
+            quickRow.addView(btn);
+        }
+        layout.addView(quickRow);
+
+        new AlertDialog.Builder(this)
+            .setTitle("Add Funds")
+            .setView(layout)
+            .setPositiveButton("Pay with Paystack", (d, w) -> {
+                String amt = etAmt.getText().toString().trim();
+                if (amt.isEmpty() || Integer.parseInt(amt) < 100) { Toast.makeText(this, "Minimum amount is \u20a6100", Toast.LENGTH_SHORT).show(); return; }
+                initPaystackPayment(Integer.parseInt(amt));
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private String pendingPayRef = null;
+
+    private void savePendingRef(String ref) {
+        pendingPayRef = ref;
+        prefs().edit().putString("pending_pay_ref", ref != null ? ref : "").apply();
+    }
+
+    private void initPaystackPayment(int amount) {
+        String phone = prefs().getString("phone", "");
+        final String email = safeGet("email");
+        if (email.isEmpty()) { Toast.makeText(this, "Please add your email in Edit Profile first", Toast.LENGTH_SHORT).show(); return; }
+        Toast.makeText(this, "Connecting to Paystack...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                URL url = new URL(SERVER_URL + "/api/wallet/initialize");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(15000);
+                conn.setDoOutput(true);
+                JSONObject body = new JSONObject();
+                body.put("phone", phone);
+                body.put("amount", amount);
+                body.put("email", email);
+                OutputStream os = conn.getOutputStream();
+                os.write(body.toString().getBytes());
+                os.close();
+                int code = conn.getResponseCode();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                handler.post(() -> {
+                    if (res.optBoolean("success")) {
+                        savePendingRef(res.optString("reference"));
+                        String payUrl = res.optString("authorization_url");
+                        paystackOverlay.setVisibility(View.VISIBLE);
+                        paystackWebView.loadUrl(payUrl);
+                    } else {
+                        Toast.makeText(this, res.optString("error", "Payment init failed"), Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception e) {
+                handler.post(() -> Toast.makeText(this, "Connection failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }).start();
+    }
+
+    private void verifyPendingPayment() {
+        // Restore from prefs if memory was cleared
+        if (pendingPayRef == null) {
+            pendingPayRef = prefs().getString("pending_pay_ref", "");
+            if (pendingPayRef.isEmpty()) pendingPayRef = null;
+        }
+        if (pendingPayRef == null) return;
+        String ref = pendingPayRef;
+        handler.post(() -> Toast.makeText(this, "Checking payment status...", Toast.LENGTH_SHORT).show());
+        verifyWithRetry(ref, 0);
+    }
+
+    private void verifyWithRetry(String ref, int attempt) {
+        new Thread(() -> {
+            try {
+                URL url = new URL(SERVER_URL + "/api/wallet/verify");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setConnectTimeout(20000);
+                conn.setReadTimeout(20000);
+                conn.setDoOutput(true);
+                JSONObject body = new JSONObject();
+                body.put("reference", ref);
+                OutputStream os = conn.getOutputStream();
+                os.write(body.toString().getBytes());
+                os.close();
+                int code = conn.getResponseCode();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                handler.post(() -> {
+                    if (res.optBoolean("success")) {
+                        savePendingRef(null);
+                        double bal = res.optDouble("balance", 0);
+                        tvWalletBalance.setText(String.format("\u20a6%.0f", bal));
+                        Toast.makeText(this, "Payment successful! Balance: \u20a6" + (int) bal, Toast.LENGTH_LONG).show();
+                        fetchWalletBalance();
+                    }
+                });
+            } catch (Exception e) {
+                // Retry up to 3 times (handles Render cold starts)
+                if (attempt < 2) {
+                    handler.postDelayed(() -> verifyWithRetry(ref, attempt + 1), 5000);
+                } else {
+                    handler.post(() -> Toast.makeText(this, "Could not verify payment. Will retry next time.", Toast.LENGTH_LONG).show());
+                }
+            }
+        }).start();
+    }
+
     private LinearLayout usageHistoryContainer, txnHistoryContainer;
     private TextView tvNoTxn, tvHistorySaved, tvHistorySavedPct;
     private TextView histTabUsage, histTabTxn;
@@ -665,7 +1009,114 @@ public class MainActivity extends Activity {
             histTabUsage.setTextColor(0xFF666666);
             histUsageSection.setVisibility(View.GONE);
             histTxnSection.setVisibility(View.VISIBLE);
-            fetchTransactions();
+            fetchAllTransactions();
+        }
+    }
+
+    private void fetchAllTransactions() {
+        txnHistoryContainer.removeAllViews();
+        tvNoTxn.setText("Loading...");
+        tvNoTxn.setVisibility(View.VISIBLE);
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) { tvNoTxn.setText("Login to see transactions"); return; }
+
+        // Fetch both airtime/data transactions AND wallet transactions
+        new Thread(() -> {
+            JSONArray combined = new JSONArray();
+            try {
+                // Airtime/data transactions
+                URL url1 = new URL(SERVER_URL + "/api/transactions/" + phone);
+                HttpURLConnection c1 = (HttpURLConnection) url1.openConnection();
+                c1.setConnectTimeout(10000); c1.setReadTimeout(10000);
+                BufferedReader r1 = new BufferedReader(new InputStreamReader(c1.getInputStream()));
+                StringBuilder s1 = new StringBuilder(); String l;
+                while ((l = r1.readLine()) != null) s1.append(l); r1.close();
+                JSONArray arr1 = new JSONArray(s1.toString());
+                for (int i = 0; i < arr1.length(); i++) combined.put(arr1.getJSONObject(i));
+            } catch (Exception e) {}
+            try {
+                // Wallet transactions
+                URL url2 = new URL(SERVER_URL + "/api/wallet/transactions/" + phone);
+                HttpURLConnection c2 = (HttpURLConnection) url2.openConnection();
+                c2.setConnectTimeout(10000); c2.setReadTimeout(10000);
+                BufferedReader r2 = new BufferedReader(new InputStreamReader(c2.getInputStream()));
+                StringBuilder s2 = new StringBuilder(); String l;
+                while ((l = r2.readLine()) != null) s2.append(l); r2.close();
+                JSONArray arr2 = new JSONArray(s2.toString());
+                for (int i = 0; i < arr2.length(); i++) {
+                    JSONObject wt = arr2.getJSONObject(i);
+                    wt.put("_wallet", true);
+                    combined.put(wt);
+                }
+            } catch (Exception e) {}
+            handler.post(() -> showAllTransactions(combined));
+        }).start();
+    }
+
+    private void showAllTransactions(JSONArray arr) {
+        txnHistoryContainer.removeAllViews();
+        if (arr.length() == 0) { tvNoTxn.setText("No transactions yet"); tvNoTxn.setVisibility(View.VISIBLE); return; }
+        tvNoTxn.setVisibility(View.GONE);
+
+        // Sort by created_at descending
+        ArrayList<JSONObject> list = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) try { list.add(arr.getJSONObject(i)); } catch (Exception e) {}
+        Collections.sort(list, (a, b) -> b.optString("created_at", "").compareTo(a.optString("created_at", "")));
+
+        for (JSONObject txn : list) {
+            boolean isWallet = txn.optBoolean("_wallet", false);
+            String title, amtText, status, date;
+            int amtColor;
+
+            if (isWallet) {
+                String type = txn.optString("type", "credit");
+                String desc = txn.optString("description", "Wallet transaction");
+                double amt = txn.optDouble("amount", 0);
+                status = txn.optString("status", "success");
+                title = type.equals("credit") ? "Wallet Top-up" : desc;
+                amtText = (type.equals("credit") ? "+" : "-") + "\u20a6" + (int) amt;
+                amtColor = type.equals("credit") ? 0xFF43A047 : 0xFFD32F2F;
+            } else {
+                String type = txn.optString("type", "");
+                String network = txn.optString("network", "");
+                String amt = txn.optString("amount", "0");
+                String planSize = txn.optString("plan_size", "");
+                status = txn.optString("status", "pending");
+                title = type.equals("data") ? network + " " + planSize + " Data" : network + " \u20a6" + amt + " Airtime";
+                amtText = "-\u20a6" + amt;
+                amtColor = 0xFFD32F2F;
+            }
+            date = txn.optString("created_at", "");
+            String dateShort = date.length() > 10 ? date.substring(0, 10) : date;
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackgroundColor(0xFFFFFFFF);
+            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+            card.setElevation(2);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = dp(8);
+            card.setLayoutParams(lp);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            TextView t = new TextView(this);
+            t.setText(title);
+            t.setTextSize(14); t.setTextColor(0xFF333333); t.setTypeface(null, Typeface.BOLD);
+            t.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            TextView a = new TextView(this);
+            a.setText(amtText); a.setTextSize(14); a.setTextColor(amtColor); a.setTypeface(null, Typeface.BOLD);
+            row.addView(t); row.addView(a);
+            card.addView(row);
+
+            TextView d = new TextView(this);
+            int statusColor = "success".equals(status) ? 0xFF43A047 : "failed".equals(status) ? 0xFFD32F2F : 0xFFFF8F00;
+            d.setText(dateShort + " \u2022 " + status.toUpperCase());
+            d.setTextSize(11); d.setTextColor(statusColor); d.setPadding(0, dp(2), 0, 0);
+            card.addView(d);
+
+            txnHistoryContainer.addView(card);
         }
     }
 
@@ -713,8 +1164,7 @@ public class MainActivity extends Activity {
         // App icon
         android.widget.ImageView icon = new android.widget.ImageView(this);
         Drawable appIcon = getAppIcon(appName);
-        if (appIcon != null) icon.setImageDrawable(appIcon);
-        else icon.setImageResource(android.R.drawable.sym_def_app_icon);
+        icon.setImageDrawable(appIcon != null ? appIcon : makeLetterIcon(appName));
         LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(36), dp(36));
         iconLp.rightMargin = dp(10);
         icon.setLayoutParams(iconLp);
@@ -753,99 +1203,7 @@ public class MainActivity extends Activity {
     }
 
     private void fetchTransactions() {
-        String phone = getSharedPreferences("datasaver", MODE_PRIVATE).getString("phone", "");
-        if (phone.isEmpty()) {
-            tvNoTxn.setText("Set your phone in Profile to see transactions");
-            tvNoTxn.setVisibility(View.VISIBLE);
-            return;
-        }
-        tvNoTxn.setText("Loading...");
-        tvNoTxn.setVisibility(View.VISIBLE);
-
-        new Thread(() -> {
-            try {
-                URL url = new URL(SERVER_URL + "/api/transactions/" + phone);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
-                reader.close();
-                JSONArray arr = new JSONArray(sb.toString());
-                handler.post(() -> showTransactions(arr));
-            } catch (Exception e) {
-                handler.post(() -> {
-                    String msg = e.getMessage();
-                    if (msg != null && msg.contains("Unable to resolve host")) msg = "No internet connection";
-                    else if (msg != null && msg.contains("timed out")) msg = "Server timed out. Tap to retry.";
-                    else msg = "No transactions yet";
-                    tvNoTxn.setText(msg);
-                    tvNoTxn.setVisibility(View.VISIBLE);
-                });
-            }
-        }).start();
-    }
-
-    private void showTransactions(JSONArray arr) {
-        txnHistoryContainer.removeAllViews();
-        if (arr.length() == 0) {
-            tvNoTxn.setText("No transactions yet");
-            tvNoTxn.setVisibility(View.VISIBLE);
-            return;
-        }
-        tvNoTxn.setVisibility(View.GONE);
-        for (int i = 0; i < arr.length(); i++) {
-            try {
-                JSONObject txn = arr.getJSONObject(i);
-                String type = txn.getString("type");
-                String network = txn.getString("network");
-                String amt = txn.getString("amount");
-                String status = txn.getString("status");
-                String date = txn.getString("created_at");
-                String planSize = txn.optString("plan_size", "");
-
-                String title = type.equals("data") ? network + " " + planSize + " Data" : network + " \u20a6" + amt + " Airtime";
-                String dateShort = date.length() > 10 ? date.substring(0, 10) : date;
-
-                LinearLayout card = new LinearLayout(this);
-                card.setOrientation(LinearLayout.VERTICAL);
-                card.setBackgroundColor(0xFFFFFFFF);
-                card.setPadding(dp(14), dp(12), dp(14), dp(12));
-                card.setElevation(2);
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                lp.bottomMargin = dp(8);
-                card.setLayoutParams(lp);
-
-                LinearLayout row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                TextView t = new TextView(this);
-                t.setText(title);
-                t.setTextSize(14);
-                t.setTextColor(0xFF333333);
-                t.setTypeface(null, Typeface.BOLD);
-                t.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-                TextView a = new TextView(this);
-                a.setText("-\u20a6" + amt);
-                a.setTextSize(14);
-                a.setTextColor(status.equals("success") ? 0xFFD32F2F : 0xFF999999);
-                a.setTypeface(null, Typeface.BOLD);
-                row.addView(t);
-                row.addView(a);
-                card.addView(row);
-
-                TextView d = new TextView(this);
-                d.setText(dateShort + " \u2022 " + status.toUpperCase());
-                d.setTextSize(11);
-                d.setTextColor(status.equals("success") ? 0xFF43A047 : status.equals("failed") ? 0xFFD32F2F : 0xFF999999);
-                d.setPadding(0, dp(2), 0, 0);
-                card.addView(d);
-
-                txnHistoryContainer.addView(card);
-            } catch (Exception e) {}
-        }
+        fetchAllTransactions();
     }
 
     // ==================== PROFILE TAB ====================
@@ -878,6 +1236,7 @@ public class MainActivity extends Activity {
         findViewById(R.id.rowEditProfile).setOnClickListener(v -> showEditProfileDialog());
         findViewById(R.id.rowChangePassword).setOnClickListener(v -> showChangePasswordDialog());
         findViewById(R.id.rowManageSub).setOnClickListener(v -> switchTab(2));
+        findViewById(R.id.btnProfileAddFunds).setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
         findViewById(R.id.rowPushNotif).setOnClickListener(v -> togglePref("push_notif", tvPushNotif));
         findViewById(R.id.rowDailyAlerts).setOnClickListener(v -> togglePref("daily_alerts", tvDailyAlerts));
         findViewById(R.id.rowImageQuality).setOnClickListener(v -> cycleImageQuality());
@@ -888,10 +1247,11 @@ public class MainActivity extends Activity {
 
     private void refreshProfileUI() {
         SharedPreferences sp = prefs();
-        String name = sp.getString("name", "DataSaver User");
+        String name = sp.getString("name", "");
+        if (name.isEmpty() || "null".equals(name)) name = "DataSaver User";
         String phone = sp.getString("phone", "");
         tvProfileName.setText(name);
-        tvProfilePhone.setText(phone.isEmpty() ? "Basic Plan" : phone + " - Basic Plan");
+        tvProfilePhone.setText(phone.isEmpty() ? "Basic Plan" : phone + " - " + (sp.getString("subscription_plan", "basic").substring(0, 1).toUpperCase() + sp.getString("subscription_plan", "basic").substring(1)) + " Plan");
         profilePhoto.setText(name.isEmpty() ? "U" : name.substring(0, 1).toUpperCase());
 
         tvPushNotif.setText(sp.getBoolean("push_notif", true) ? "ON" : "OFF");
@@ -906,10 +1266,16 @@ public class MainActivity extends Activity {
         tvWifiCompress.setTextColor(sp.getBoolean("wifi_compress", false) ? 0xFF43A047 : 0xFFD32F2F);
 
         tvServerAddr.setText(SERVER_URL.replace("https://", ""));
+        String subPlan = sp.getString("subscription_plan", "basic");
+        TextView tvManageSub = findViewById(R.id.tvManageSubLabel);
+        if (tvManageSub != null) tvManageSub.setText(subPlan.substring(0, 1).toUpperCase() + subPlan.substring(1) + " >");
         try {
             String vn = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
             tvAppVersion.setText(vn != null ? "v" + vn : "v1.0.0");
         } catch (Exception e) { tvAppVersion.setText("v1.0.0"); }
+
+        // Update profile wallet
+        fetchProfileWallet();
     }
 
     private void togglePref(String key, TextView tv) {
@@ -918,6 +1284,30 @@ public class MainActivity extends Activity {
         sp.edit().putBoolean(key, !current).apply();
         tv.setText(!current ? "ON" : "OFF");
         tv.setTextColor(!current ? 0xFF43A047 : 0xFFD32F2F);
+    }
+
+    private void fetchProfileWallet() {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) return;
+        TextView tvPW = findViewById(R.id.tvProfileWallet);
+        new Thread(() -> {
+            try {
+                URL url = new URL(SERVER_URL + "/api/user/" + phone);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                double bal = res.optDouble("wallet_balance", 0);
+                handler.post(() -> tvPW.setText(String.format("\u20a6%.0f", bal)));
+            } catch (Exception e) {
+                handler.post(() -> tvPW.setText("\u20a60"));
+            }
+        }).start();
     }
 
     private void cycleImageQuality() {
@@ -931,6 +1321,11 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "Image quality: " + next, Toast.LENGTH_SHORT).show();
     }
 
+    private String safeGet(String key) {
+        String v = prefs().getString(key, "");
+        return (v == null || "null".equals(v)) ? "" : v;
+    }
+
     private void showEditProfileDialog() {
         SharedPreferences sp = prefs();
         LinearLayout layout = new LinearLayout(this);
@@ -939,19 +1334,19 @@ public class MainActivity extends Activity {
 
         EditText etName = new EditText(this);
         etName.setHint("Name");
-        etName.setText(sp.getString("name", ""));
+        etName.setText(safeGet("name"));
         layout.addView(etName);
 
         EditText etPh = new EditText(this);
         etPh.setHint("Phone");
         etPh.setInputType(android.text.InputType.TYPE_CLASS_PHONE);
-        etPh.setText(sp.getString("phone", ""));
+        etPh.setText(safeGet("phone"));
         layout.addView(etPh);
 
         EditText etEmail = new EditText(this);
         etEmail.setHint("Email");
         etEmail.setInputType(android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-        etEmail.setText(sp.getString("email", ""));
+        etEmail.setText(safeGet("email"));
         layout.addView(etEmail);
 
         new AlertDialog.Builder(this)
@@ -1040,6 +1435,8 @@ public class MainActivity extends Activity {
                 switchTab(0);
                 updateUI();
                 loginOverlay.setVisibility(View.VISIBLE);
+                // Reset to login tab
+                switchAuthTab(false, (TextView) findViewById(R.id.tabLogin), (TextView) findViewById(R.id.tabSignup));
                 Toast.makeText(this, "Logged out", Toast.LENGTH_SHORT).show();
             })
             .setNegativeButton("Cancel", null)
@@ -1074,6 +1471,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == VPN_REQUEST_CODE) {
+            if (resultCode == RESULT_OK) {
+                startServices();
+            } else {
+                Toast.makeText(this, "VPN permission required for data saving", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
         if (requestCode == PICK_PHOTO && resultCode == RESULT_OK && data != null) {
             try {
                 InputStream is = getContentResolver().openInputStream(data.getData());
@@ -1096,6 +1501,216 @@ public class MainActivity extends Activity {
 
     // ==================== TABS / HOME ====================
 
+    private String currentPlan = "basic";
+
+    private void loadSubscriptionPlans() {
+        LinearLayout container = findViewById(R.id.subsPlansContainer);
+        container.removeAllViews();
+        TextView header = findViewById(R.id.tvCurrentPlanHeader);
+
+        // Fetch current plan from server
+        String phone = prefs().getString("phone", "");
+        if (!phone.isEmpty()) {
+            new Thread(() -> {
+                try {
+                    URL url = new URL(SERVER_URL + "/api/subscription/" + phone);
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setConnectTimeout(10000);
+                    conn.setReadTimeout(10000);
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+                    JSONObject res = new JSONObject(sb.toString());
+                    currentPlan = res.optString("plan", "basic");
+                    String expires = res.optString("expires_at", "");
+                    handler.post(() -> {
+                        String label = currentPlan.substring(0, 1).toUpperCase() + currentPlan.substring(1);
+                        if (!"basic".equals(currentPlan) && !expires.isEmpty()) {
+                            String expDate = expires.length() > 10 ? expires.substring(0, 10) : expires;
+                            header.setText("Current: " + label + " (expires " + expDate + ")");
+                        } else {
+                            header.setText("Current Plan: " + label + ("basic".equals(currentPlan) ? " (Free)" : ""));
+                        }
+                        buildPlanCards(container);
+                    });
+                } catch (Exception e) {
+                    handler.post(() -> buildPlanCards(container));
+                }
+            }).start();
+        } else {
+            buildPlanCards(container);
+        }
+    }
+
+    private void buildPlanCards(LinearLayout container) {
+        container.removeAllViews();
+        String[][] plans = {
+            {"basic", "Basic", "FREE", "",
+             "Image compression (up to 30%)",
+             "Text/HTML gzip compression",
+             "Basic data monitoring"},
+            {"premium", "Premium", "\u20a6500", "/week",
+             "Everything in Basic",
+             "Advanced image compression (up to 40%)",
+             "Per-app data optimization",
+             "Ad blocking saves extra data",
+             "Detailed analytics dashboard",
+             "Priority server access"},
+            {"professional", "Professional", "\u20a61,500", "/month",
+             "Everything in Premium",
+             "Video compression (up to 40%)",
+             "Unlimited compression bandwidth",
+             "Multi-device support (up to 3)"},
+            {"enterprise", "Enterprise", "\u20a65,000", "/month",
+             "Everything in Professional",
+             "Maximum compression bandwidth",
+             "Multi-device support (up to 5)",
+             "24/7 priority support"}
+        };
+
+        for (String[] p : plans) {
+            String planId = p[0];
+            String planName = p[1];
+            String price = p[2];
+            String period = p[3];
+            boolean isCurrent = planId.equals(currentPlan);
+            boolean isEnterprise = "enterprise".equals(planId);
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackgroundColor(isEnterprise ? 0xFF1565C0 : 0xFFFFFFFF);
+            card.setPadding(dp(16), dp(16), dp(16), dp(16));
+            card.setElevation(isEnterprise ? 4 : 2);
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            cp.bottomMargin = dp(12);
+            card.setLayoutParams(cp);
+
+            // Title row
+            LinearLayout titleRow = new LinearLayout(this);
+            titleRow.setOrientation(LinearLayout.HORIZONTAL);
+            TextView tvName = new TextView(this);
+            tvName.setText(planName);
+            tvName.setTextSize(18);
+            tvName.setTypeface(null, Typeface.BOLD);
+            tvName.setTextColor(isEnterprise ? 0xFFFFFFFF : 0xFF333333);
+            tvName.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            titleRow.addView(tvName);
+            TextView tvPrice = new TextView(this);
+            tvPrice.setText(price + period);
+            tvPrice.setTextSize(18);
+            tvPrice.setTypeface(null, Typeface.BOLD);
+            tvPrice.setTextColor(isEnterprise ? 0xFFFFFFFF : ("basic".equals(planId) ? 0xFF43A047 : 0xFF1565C0));
+            titleRow.addView(tvPrice);
+            card.addView(titleRow);
+
+            // Divider
+            View div = new View(this);
+            div.setBackgroundColor(isEnterprise ? 0xFF2979FF : 0xFFEEEEEE);
+            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
+            dlp.topMargin = dp(8);
+            dlp.bottomMargin = dp(8);
+            div.setLayoutParams(dlp);
+            card.addView(div);
+
+            // Features
+            for (int i = 4; i < p.length; i++) {
+                TextView feat = new TextView(this);
+                feat.setText("\u2713  " + p[i]);
+                feat.setTextSize(13);
+                feat.setTextColor(isEnterprise ? 0xFFE3F2FD : 0xFF555555);
+                feat.setPadding(0, 0, 0, dp(4));
+                card.addView(feat);
+            }
+
+            // Button
+            Button btn = new Button(this);
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
+            blp.topMargin = dp(8);
+            btn.setLayoutParams(blp);
+            btn.setTextSize(13);
+            btn.setTypeface(null, Typeface.BOLD);
+
+            if (isCurrent) {
+                btn.setText("CURRENT PLAN");
+                btn.setTextColor(0xFFFFFFFF);
+                btn.setBackgroundColor(0xFF43A047);
+                btn.setEnabled(false);
+            } else if ("basic".equals(planId)) {
+                btn.setText("FREE PLAN");
+                btn.setTextColor(0xFFFFFFFF);
+                btn.setBackgroundColor(0xFF999999);
+                btn.setEnabled(false);
+            } else {
+                btn.setText("SUBSCRIBE - " + price + period);
+                btn.setTextColor(isEnterprise ? 0xFF1565C0 : 0xFFFFFFFF);
+                btn.setBackgroundColor(isEnterprise ? 0xFFFFFFFF : 0xFF1565C0);
+                btn.setOnClickListener(v -> subscribeToPlan(planId, planName, price + period));
+            }
+            card.addView(btn);
+            container.addView(card);
+        }
+    }
+
+    private void subscribeToPlan(String planId, String planName, String priceLabel) {
+        new AlertDialog.Builder(this)
+            .setTitle("Subscribe to " + planName)
+            .setMessage("This will charge " + priceLabel + " from your wallet balance.\n\nContinue?")
+            .setPositiveButton("Subscribe", (d, w) -> {
+                String phone = prefs().getString("phone", "");
+                if (phone.isEmpty()) { Toast.makeText(this, "Please login first", Toast.LENGTH_SHORT).show(); return; }
+                Toast.makeText(this, "Processing...", Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    try {
+                        URL url = new URL(SERVER_URL + "/api/subscribe");
+                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("POST");
+                        conn.setRequestProperty("Content-Type", "application/json");
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(15000);
+                        conn.setDoOutput(true);
+                        JSONObject body = new JSONObject();
+                        body.put("phone", phone);
+                        body.put("plan", planId);
+                        OutputStream os = conn.getOutputStream();
+                        os.write(body.toString().getBytes());
+                        os.close();
+                        int code = conn.getResponseCode();
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                            code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) sb.append(line);
+                        reader.close();
+                        JSONObject res = new JSONObject(sb.toString());
+                        handler.post(() -> {
+                            if (code < 400 && res.optBoolean("success")) {
+                                currentPlan = planId;
+                                prefs().edit().putString("subscription_plan", planId).apply();
+                                Toast.makeText(this, res.optString("message", "Subscribed!"), Toast.LENGTH_LONG).show();
+                                fetchWalletBalance();
+                                loadSubscriptionPlans();
+                            } else {
+                                String err = res.optString("error", "Subscription failed");
+                                if (err.contains("Insufficient")) {
+                                    showTopUpPrompt(err);
+                                } else {
+                                    Toast.makeText(this, err, Toast.LENGTH_LONG).show();
+                                }
+                            }
+                        });
+                    } catch (Exception e) {
+                        handler.post(() -> Toast.makeText(this, "Connection failed", Toast.LENGTH_SHORT).show());
+                    }
+                }).start();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
     private void switchTab(int tab) {
         tabHome.setVisibility(tab == 0 ? View.VISIBLE : View.GONE);
         tabAirtime.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
@@ -1114,6 +1729,7 @@ public class MainActivity extends Activity {
                 etPhone.setText(savedPhone);
             }
         }
+        if (tab == 2) { loadSubscriptionPlans(); }
         if (tab == 3) {
             refreshUsageHistory();
             fetchTransactions();
@@ -1128,11 +1744,17 @@ public class MainActivity extends Activity {
         return mode == AppOpsManager.MODE_ALLOWED;
     }
 
+    private static final int VPN_REQUEST_CODE = 1002;
+
     private void toggle() {
         if (DataSaverService.isRunning) {
             Intent i = new Intent(this, DataSaverService.class);
             i.setAction(DataSaverService.ACTION_STOP);
             startService(i);
+            // Stop VPN
+            Intent vi = new Intent(this, DataSaverVpnService.class);
+            vi.setAction("STOP");
+            startService(vi);
             polling = false;
             handler.postDelayed(() -> updateUI(), 500);
         } else {
@@ -1141,17 +1763,29 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
                 return;
             }
-            Intent i = new Intent(this, DataSaverService.class);
-            i.setAction(DataSaverService.ACTION_START);
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
-                startForegroundService(i);
+            // Request VPN permission
+            Intent vpnIntent = android.net.VpnService.prepare(this);
+            if (vpnIntent != null) {
+                startActivityForResult(vpnIntent, VPN_REQUEST_CODE);
             } else {
-                startService(i);
+                startServices();
             }
-            polling = true;
-            handler.postDelayed(() -> pollUI(), 1000);
-            handler.postDelayed(() -> updateUI(), 500);
         }
+    }
+
+    private void startServices() {
+        Intent i = new Intent(this, DataSaverService.class);
+        i.setAction(DataSaverService.ACTION_START);
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(i);
+        } else {
+            startService(i);
+        }
+        // Start VPN simulation
+        startService(new Intent(this, DataSaverVpnService.class));
+        polling = true;
+        handler.postDelayed(() -> pollUI(), 1000);
+        handler.postDelayed(() -> updateUI(), 500);
     }
 
     @Override
@@ -1160,6 +1794,7 @@ public class MainActivity extends Activity {
         updateUI();
         updateSummary();
         fetchWalletBalance();
+        verifyPendingPayment();
         if (DataSaverService.isRunning && !polling) {
             polling = true;
             handler.postDelayed(() -> pollUI(), 1000);
@@ -1168,7 +1803,7 @@ public class MainActivity extends Activity {
 
     private void updateUI() {
         if (DataSaverService.isRunning) {
-            tvStatus.setText("Connected \u2014 Saving Data");
+            tvStatus.setText(DataSaverVpnService.isVpnRunning ? "VPN Connected \u2014 Saving Data" : "Connected \u2014 Saving Data");
             btnConnect.setText("ON");
             btnConnect.setBackgroundResource(R.drawable.circle_on);
         } else {
@@ -1245,11 +1880,7 @@ public class MainActivity extends Activity {
             // App icon
             android.widget.ImageView icon = new android.widget.ImageView(this);
             Drawable appIcon = getAppIcon(entry.getKey());
-            if (appIcon != null) icon.setImageDrawable(appIcon);
-            else {
-                icon.setBackgroundColor(0xFF1565C0);
-                icon.setImageResource(android.R.drawable.sym_def_app_icon);
-            }
+            icon.setImageDrawable(appIcon != null ? appIcon : makeLetterIcon(entry.getKey()));
             LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(36), dp(36));
             iconLp.rightMargin = dp(10);
             icon.setLayoutParams(iconLp);
@@ -1290,15 +1921,55 @@ public class MainActivity extends Activity {
         }
     }
 
+    // Icon cache for downloaded icons
+    private final java.util.HashMap<String, Drawable> iconCache = new java.util.HashMap<>();
+
     private Drawable getAppIcon(String appName) {
+        // Check cache first
+        if (iconCache.containsKey(appName)) return iconCache.get(appName);
         PackageManager pm = getPackageManager();
-        String[][] knownApps = DataSaverService.PRIORITY_APPS;
-        for (String[] app : knownApps) {
+        // Try all matching package names for this app name
+        for (String[] app : DataSaverService.PRIORITY_APPS) {
             if (app[1].equals(appName)) {
-                try { return pm.getApplicationIcon(app[0]); } catch (Exception e) {}
+                try {
+                    Drawable d = pm.getApplicationIcon(app[0]);
+                    iconCache.put(appName, d);
+                    return d;
+                } catch (Exception e) {}
             }
         }
+        // Try searching installed apps by label
+        try {
+            for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+                if (pm.getApplicationLabel(ai).toString().equals(appName)) {
+                    Drawable d = pm.getApplicationIcon(ai);
+                    iconCache.put(appName, d);
+                    return d;
+                }
+            }
+        } catch (Exception e) {}
         return null;
+    }
+
+    private Drawable makeLetterIcon(String name) {
+        int size = dp(36);
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        android.graphics.Paint bg = new android.graphics.Paint();
+        bg.setAntiAlias(true);
+        // Pick color based on name hash
+        int[] colors = {0xFF1565C0, 0xFF43A047, 0xFFE65100, 0xFF6A1B9A, 0xFFD32F2F, 0xFF00838F};
+        bg.setColor(colors[Math.abs(name.hashCode()) % colors.length]);
+        c.drawCircle(size / 2f, size / 2f, size / 2f, bg);
+        android.graphics.Paint txt = new android.graphics.Paint();
+        txt.setAntiAlias(true);
+        txt.setColor(0xFFFFFFFF);
+        txt.setTextSize(size * 0.45f);
+        txt.setTypeface(Typeface.DEFAULT_BOLD);
+        txt.setTextAlign(android.graphics.Paint.Align.CENTER);
+        String letter = name.length() > 0 ? name.substring(0, 1).toUpperCase() : "?";
+        c.drawText(letter, size / 2f, size / 2f - (txt.ascent() + txt.descent()) / 2f, txt);
+        return new BitmapDrawable(getResources(), bmp);
     }
 
     private int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density); }

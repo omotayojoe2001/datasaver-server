@@ -23,6 +23,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
 const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN || '1a3812d2a280b21cf9a198dde909bdf3d80c0b70';
 
+// Paystack config
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET || '<paystack_secret>';
+const PAYSTACK_PUBLIC = process.env.PAYSTACK_PUBLIC || '<paystack_public>';
+
 // DataStation uses numeric network IDs
 const NETWORK_IDS = { 'MTN': 1, 'GLO': 2, '9MOBILE': 3, 'AIRTEL': 4 };
 
@@ -49,22 +53,46 @@ app.get('/api/plans', async (req, res) => {
 // USER API
 // ============================================
 
-// POST /api/register  { phone, pin }
+// POST /api/register  { email, pin, name, phone }
 app.post('/api/register', async (req, res) => {
-  const { phone, pin } = req.body;
-  if (!phone) return res.status(400).json({ error: 'Phone required' });
+  const { phone, pin, name, email } = req.body;
+  if (!email || !pin) return res.status(400).json({ error: 'Email and PIN required' });
 
   try {
-    // Check if exists
-    const { data: existing } = await supabase.from('users').select('id').eq('phone', phone).single();
-    if (existing) return res.json({ user_id: existing.id, message: 'Welcome back' });
+    // Check if email already exists
+    const { data: emailExists } = await supabase.from('users').select('id').eq('email', email).single();
+    if (emailExists) return res.status(409).json({ error: 'Email already registered. Please login instead.' });
 
-    const { data, error } = await supabase.from('users')
-      .insert({ phone, pin: pin || '0000' })
-      .select('id')
-      .single();
+    // Check if phone already exists
+    if (phone) {
+      const { data: existing } = await supabase.from('users').select('id').eq('phone', phone).single();
+      if (existing) return res.status(409).json({ error: 'Phone number already registered. Please login instead.' });
+    }
+
+    const row = { email, pin: pin || '0000' };
+    if (name) row.name = name;
+    if (phone) row.phone = phone;
+    const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan').single();
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ user_id: data.id, message: 'Registered' });
+    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'basic', message: 'Account created' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/login  { email, pin } or { phone, pin }
+app.post('/api/login', async (req, res) => {
+  const { phone, email, pin } = req.body;
+  if ((!phone && !email) || !pin) return res.status(400).json({ error: 'Email/phone and PIN required' });
+
+  try {
+    let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at');
+    if (email) query = query.eq('email', email);
+    else query = query.eq('phone', phone);
+    const { data: user, error } = await query.single();
+    if (error || !user) return res.status(404).json({ error: 'Account not found. Please sign up first.' });
+    if (user.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
+    res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, subscription_plan: user.subscription_plan || 'basic', message: 'Login successful' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -74,10 +102,18 @@ app.post('/api/register', async (req, res) => {
 app.get('/api/user/:phone', async (req, res) => {
   try {
     const { data, error } = await supabase.from('users')
-      .select('id, phone, wallet_balance, created_at')
+      .select('id, phone, name, email, wallet_balance, subscription_plan, subscription_expires_at, created_at')
       .eq('phone', req.params.phone)
       .single();
     if (error) return res.status(404).json({ error: 'User not found' });
+    // Check if subscription expired
+    if (data.subscription_plan && data.subscription_plan !== 'basic' && data.subscription_expires_at) {
+      if (new Date(data.subscription_expires_at) < new Date()) {
+        await supabase.from('users').update({ subscription_plan: 'basic', subscription_expires_at: null }).eq('id', data.id);
+        data.subscription_plan = 'basic';
+        data.subscription_expires_at = null;
+      }
+    }
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -105,6 +141,14 @@ app.post('/api/buy-data', async (req, res) => {
     if (!userId && phone) {
       const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
       if (u) { userId = u.id; walletBal = parseFloat(u.wallet_balance || 0); }
+    } else if (userId) {
+      const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('id', userId).single();
+      if (u) walletBal = parseFloat(u.wallet_balance || 0);
+    }
+
+    // Check wallet balance
+    if (walletBal < parseFloat(plan.amount)) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + walletBal.toFixed(0) + ' but need \u20a6' + plan.amount });
     }
 
     // Create pending transaction
@@ -138,12 +182,16 @@ app.post('/api/buy-data', async (req, res) => {
         }
       });
 
+      // Debit wallet
+      await supabase.from('users').update({ wallet_balance: walletBal - parseFloat(plan.amount) }).eq('id', userId);
+      await supabase.from('wallet_transactions').insert({ user_id: userId, type: 'debit', amount: parseFloat(plan.amount), description: plan.size + ' ' + plan.network + ' data' });
+
       // Update transaction
       await supabase.from('transactions')
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
-      res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data });
+      res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(plan.amount) });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
       await supabase.from('transactions')
@@ -168,9 +216,18 @@ app.post('/api/buy-airtime', async (req, res) => {
   try {
     // Resolve user
     let userId = user_id || null;
+    let walletBal = 0;
     if (!userId && phone) {
-      const { data: u } = await supabase.from('users').select('id').eq('phone', phone).single();
-      if (u) userId = u.id;
+      const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
+      if (u) { userId = u.id; walletBal = parseFloat(u.wallet_balance || 0); }
+    } else if (userId) {
+      const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('id', userId).single();
+      if (u) walletBal = parseFloat(u.wallet_balance || 0);
+    }
+
+    // Check wallet balance
+    if (walletBal < parseFloat(amount)) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + walletBal.toFixed(0) + ' but need \u20a6' + amount });
     }
 
     // Create pending transaction
@@ -203,11 +260,15 @@ app.post('/api/buy-airtime', async (req, res) => {
         }
       });
 
+      // Debit wallet
+      await supabase.from('users').update({ wallet_balance: walletBal - parseFloat(amount) }).eq('id', userId);
+      await supabase.from('wallet_transactions').insert({ user_id: userId, type: 'debit', amount: parseFloat(amount), description: '\u20a6' + amount + ' ' + network + ' airtime' });
+
       await supabase.from('transactions')
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
-      res.json({ success: true, transaction_id: txn.id, message: 'N' + amount + ' airtime sent to ' + phone, api: apiRes.data });
+      res.json({ success: true, transaction_id: txn.id, message: 'N' + amount + ' airtime sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(amount) });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
       await supabase.from('transactions')
@@ -243,10 +304,219 @@ app.get('/api/transactions/:phone', async (req, res) => {
 });
 
 // ============================================
-// WALLET
+// SUBSCRIPTIONS
 // ============================================
 
-// POST /api/wallet/topup  { phone, amount }
+const PLAN_CONFIG = {
+  premium:      { amount: 500,   duration: '7 days',  ms: 7 * 24 * 60 * 60 * 1000 },
+  professional: { amount: 1500,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000 },
+  enterprise:   { amount: 5000,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000 }
+};
+
+// POST /api/subscribe  { phone, plan }
+app.post('/api/subscribe', async (req, res) => {
+  const { phone, plan } = req.body;
+  if (!phone || !plan) return res.status(400).json({ error: 'phone and plan required' });
+  const cfg = PLAN_CONFIG[plan];
+  if (!cfg) return res.status(400).json({ error: 'Invalid plan. Choose premium, professional, or enterprise' });
+
+  try {
+    const { data: user } = await supabase.from('users').select('id, wallet_balance, subscription_plan').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const bal = parseFloat(user.wallet_balance || 0);
+    if (bal < cfg.amount) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + bal.toFixed(0) + ' but need \u20a6' + cfg.amount });
+    }
+
+    const expiresAt = new Date(Date.now() + cfg.ms).toISOString();
+    const newBal = bal - cfg.amount;
+
+    // Update user
+    await supabase.from('users').update({ subscription_plan: plan, subscription_expires_at: expiresAt, wallet_balance: newBal }).eq('id', user.id);
+
+    // Log subscription
+    await supabase.from('subscriptions').insert({ user_id: user.id, plan, amount: cfg.amount, duration: cfg.duration, expires_at: expiresAt });
+
+    // Log wallet debit
+    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'debit', amount: cfg.amount, description: plan.charAt(0).toUpperCase() + plan.slice(1) + ' subscription (' + cfg.duration + ')' });
+
+    res.json({ success: true, plan, expires_at: expiresAt, wallet_balance: newBal, message: 'Subscribed to ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/subscription/:phone
+app.get('/api/subscription/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id, subscription_plan, subscription_expires_at').eq('phone', req.params.phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    // Check expiry
+    let plan = user.subscription_plan || 'basic';
+    let expires = user.subscription_expires_at;
+    if (plan !== 'basic' && expires && new Date(expires) < new Date()) {
+      await supabase.from('users').update({ subscription_plan: 'basic', subscription_expires_at: null }).eq('id', user.id);
+      plan = 'basic';
+      expires = null;
+    }
+    res.json({ plan, expires_at: expires });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// WALLET + PAYSTACK
+// ============================================
+
+// POST /api/wallet/initialize  { phone, amount, email }
+app.post('/api/wallet/initialize', async (req, res) => {
+  const { phone, amount, email } = req.body;
+  if (!amount) return res.status(400).json({ error: 'amount required' });
+  if (!email && !phone) return res.status(400).json({ error: 'email or phone required' });
+
+  let payEmail = email;
+  let payPhone = phone;
+  if (!payEmail && payPhone) {
+    const { data: u } = await supabase.from('users').select('email, phone').eq('phone', payPhone).single();
+    if (u && u.email) payEmail = u.email;
+  }
+  if (!payEmail) return res.status(400).json({ error: 'Email is required for payment. Please update your profile.' });
+
+  try {
+    const paystackRes = await axios.post('https://api.paystack.co/transaction/initialize', {
+      email: payEmail,
+      amount: Math.round(parseFloat(amount) * 100),
+      currency: 'NGN',
+      metadata: { phone: payPhone || '', email: payEmail, type: 'wallet_topup' },
+      callback_url: 'https://datasaver-server.onrender.com/api/wallet/callback'
+    }, {
+      headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET, 'Content-Type': 'application/json' }
+    });
+    const ref = paystackRes.data.data.reference;
+
+    // Save pending wallet transaction immediately
+    let user = null;
+    if (payPhone) { const { data: u } = await supabase.from('users').select('id').eq('phone', payPhone).single(); user = u; }
+    if (!user && payEmail) { const { data: u } = await supabase.from('users').select('id').eq('email', payEmail).single(); user = u; }
+    if (user) {
+      await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount: parseFloat(amount), status: 'pending', description: 'Wallet top-up (ref: ' + ref + ')' });
+    }
+
+    res.json({ success: true, authorization_url: paystackRes.data.data.authorization_url, reference: ref });
+  } catch (e) {
+    const msg = e.response ? JSON.stringify(e.response.data) : e.message;
+    res.status(500).json({ error: 'Paystack init failed: ' + msg });
+  }
+});
+
+// Helper: credit wallet and update pending transaction to success
+async function creditWallet(ref, amount, phone, email) {
+  let user = null;
+  if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
+  if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', email).single(); user = u; }
+  if (!user) return null;
+
+  // Check if already credited (prevent double credit)
+  const { data: existing } = await supabase.from('wallet_transactions').select('id, status').ilike('description', '%' + ref + '%').single();
+  if (existing && existing.status === 'success') return user;
+
+  // Update pending record to success, or insert if missing
+  if (existing) {
+    await supabase.from('wallet_transactions').update({ status: 'success' }).eq('id', existing.id);
+  } else {
+    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount, status: 'success', description: 'Paystack top-up (ref: ' + ref + ')' });
+  }
+
+  const newBal = parseFloat(user.wallet_balance || 0) + amount;
+  await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+  return { ...user, wallet_balance: newBal };
+}
+
+// Helper: mark pending transaction as failed
+async function failWalletTxn(ref) {
+  const { data: existing } = await supabase.from('wallet_transactions').select('id').ilike('description', '%' + ref + '%').single();
+  if (existing) await supabase.from('wallet_transactions').update({ status: 'failed' }).eq('id', existing.id);
+}
+
+// GET /api/wallet/callback?reference=xxx (Paystack redirects here)
+app.get('/api/wallet/callback', async (req, res) => {
+  const ref = req.query.reference || req.query.trxref;
+  if (!ref) return res.send('<h2>Missing reference</h2>');
+  try {
+    const verify = await axios.get('https://api.paystack.co/transaction/verify/' + ref, {
+      headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET }
+    });
+    const txn = verify.data.data;
+    if (txn.status === 'success') {
+      const amount = txn.amount / 100;
+      await creditWallet(ref, amount, txn.metadata.phone, txn.metadata.email);
+      res.send('<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:sans-serif;text-align:center;padding:40px;background:#f0f4f8}h1{color:#43A047}p{color:#333;font-size:18px}</style></head><body><h1>Payment Successful!</h1><p>\u20a6' + amount + ' has been added to your wallet.</p><p>You can close this page and return to the app.</p></body></html>');
+    } else {
+      await failWalletTxn(ref);
+      res.send('<h2>Payment not successful: ' + txn.status + '</h2>');
+    }
+  } catch (e) {
+    res.send('<h2>Verification failed</h2><p>' + e.message + '</p>');
+  }
+});
+
+// POST /api/wallet/webhook (Paystack sends payment events here)
+app.post('/api/wallet/webhook', async (req, res) => {
+  const crypto = require('crypto');
+  const hash = crypto.createHmac('sha512', PAYSTACK_SECRET).update(JSON.stringify(req.body)).digest('hex');
+  if (hash !== req.headers['x-paystack-signature']) return res.sendStatus(400);
+
+  const event = req.body;
+  if (event.event === 'charge.success') {
+    const txn = event.data;
+    try {
+      const result = await creditWallet(txn.reference, txn.amount / 100, txn.metadata && txn.metadata.phone, txn.metadata && txn.metadata.email);
+      console.log('Webhook: credited ref', txn.reference, result ? 'OK' : 'user not found');
+    } catch (e) {
+      console.log('Webhook error:', e.message);
+    }
+  }
+  res.sendStatus(200);
+});
+
+// POST /api/wallet/verify  { reference }
+app.post('/api/wallet/verify', async (req, res) => {
+  const { reference } = req.body;
+  if (!reference) return res.status(400).json({ error: 'reference required' });
+  try {
+    const verify = await axios.get('https://api.paystack.co/transaction/verify/' + reference, {
+      headers: { 'Authorization': 'Bearer ' + PAYSTACK_SECRET }
+    });
+    const txn = verify.data.data;
+    if (txn.status === 'success') {
+      const result = await creditWallet(reference, txn.amount / 100, txn.metadata.phone, txn.metadata.email);
+      if (result) return res.json({ success: true, balance: result.wallet_balance });
+      return res.status(404).json({ error: 'User not found' });
+    }
+    await failWalletTxn(reference);
+    res.json({ success: false, status: txn.status });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/wallet/transactions/:phone — all wallet transactions
+app.get('/api/wallet/transactions/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
+    if (!user) return res.json([]);
+    const { data, error } = await supabase.from('wallet_transactions')
+      .select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(50);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/wallet/topup  { phone, amount } (manual/admin topup)
 app.post('/api/wallet/topup', async (req, res) => {
   const { phone, amount } = req.body;
   if (!phone || !amount) return res.status(400).json({ error: 'phone and amount required' });
