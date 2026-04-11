@@ -376,7 +376,7 @@ app.post('/api/wallet/initialize', async (req, res) => {
   if (!phone || !amount) return res.status(400).json({ error: 'phone and amount required' });
   try {
     const paystackRes = await axios.post('https://api.paystack.co/transaction/initialize', {
-      email: email || phone + '@datasaver.app',
+      email: email || phone + '@datasaver.ng',
       amount: Math.round(parseFloat(amount) * 100),
       currency: 'NGN',
       metadata: { phone, type: 'wallet_topup' },
