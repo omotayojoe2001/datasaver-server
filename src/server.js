@@ -53,22 +53,46 @@ app.get('/api/plans', async (req, res) => {
 // USER API
 // ============================================
 
-// POST /api/register  { phone, pin }
+// POST /api/register  { phone, pin, name, email }
 app.post('/api/register', async (req, res) => {
-  const { phone, pin } = req.body;
-  if (!phone) return res.status(400).json({ error: 'Phone required' });
+  const { phone, pin, name, email } = req.body;
+  if (!phone || !pin) return res.status(400).json({ error: 'Phone and PIN required' });
 
   try {
-    // Check if exists
+    // Check if phone already exists
     const { data: existing } = await supabase.from('users').select('id').eq('phone', phone).single();
-    if (existing) return res.json({ user_id: existing.id, message: 'Welcome back' });
+    if (existing) return res.status(409).json({ error: 'Phone number already registered. Please login instead.' });
 
-    const { data, error } = await supabase.from('users')
-      .insert({ phone, pin: pin || '0000' })
-      .select('id')
-      .single();
+    // Check if email already exists
+    if (email) {
+      const { data: emailExists } = await supabase.from('users').select('id').eq('email', email).single();
+      if (emailExists) return res.status(409).json({ error: 'Email already registered. Please login instead.' });
+    }
+
+    const row = { phone, pin: pin || '0000' };
+    if (name) row.name = name;
+    if (email) row.email = email;
+    const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance').single();
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ user_id: data.id, message: 'Registered' });
+    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, message: 'Account created' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/login  { phone, pin } or { email, pin }
+app.post('/api/login', async (req, res) => {
+  const { phone, email, pin } = req.body;
+  if ((!phone && !email) || !pin) return res.status(400).json({ error: 'Phone/email and PIN required' });
+
+  try {
+    let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance');
+    if (phone) query = query.eq('phone', phone);
+    else query = query.eq('email', email);
+    const { data: user, error } = await query.single();
+    if (error || !user) return res.status(404).json({ error: 'Account not found. Please sign up first.' });
+    if (user.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
+    res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, message: 'Login successful' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -78,7 +102,7 @@ app.post('/api/register', async (req, res) => {
 app.get('/api/user/:phone', async (req, res) => {
   try {
     const { data, error } = await supabase.from('users')
-      .select('id, phone, wallet_balance, created_at')
+      .select('id, phone, name, email, wallet_balance, created_at')
       .eq('phone', req.params.phone)
       .single();
     if (error) return res.status(404).json({ error: 'User not found' });
