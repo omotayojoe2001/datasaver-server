@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const sharp = require('sharp');
 const compression = require('compression');
@@ -15,12 +16,12 @@ app.use(express.json());
 // SUPABASE
 // ============================================
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://fjygdysjdpjafkjkqfad.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || '<SUPABASE_ANON_KEY>';
+const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZqeWdkeXNqZHBqYWZramtxZmFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MzA4NjgsImV4cCI6MjA5MTQwNjg2OH0.-CDiVLSsuvSMl0IYOrPDD3CKvwttkt_D4WTAMVdb6UM';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // DataStation API config
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
-const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN || '<DATASTATION_TOKEN>';
+const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN || '1a3812d2a280b21cf9a198dde909bdf3d80c0b70';
 
 // DataStation uses numeric network IDs
 const NETWORK_IDS = { 'MTN': 1, 'GLO': 2, '9MOBILE': 3, 'AIRTEL': 4 };
