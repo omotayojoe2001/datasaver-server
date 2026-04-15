@@ -1,8 +1,6 @@
-node_modules/
-android-lite/out/
-android-lite/gen/
-android-lite/obj/
+android/
 android-lite/bin/
-*.apk
-*.keystore
-.env
+android-lite/gen/
+android-lite/out/
+node_modules/
+server/server.log

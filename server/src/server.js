@@ -98,6 +98,23 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// POST /api/user/update  { phone, name, email }
+app.post('/api/user/update', async (req, res) => {
+  const { phone, name, email } = req.body;
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  try {
+    const updates = {};
+    if (name !== undefined && name !== null && name !== 'null') updates.name = name;
+    if (email !== undefined && email !== null && email !== 'null') updates.email = email;
+    if (Object.keys(updates).length === 0) return res.json({ success: true, message: 'Nothing to update' });
+    const { error } = await supabase.from('users').update(updates).eq('phone', phone);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, message: 'Profile updated' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/user/:phone
 app.get('/api/user/:phone', async (req, res) => {
   try {

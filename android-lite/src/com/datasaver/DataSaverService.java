@@ -439,6 +439,16 @@ public class DataSaverService extends Service {
         int[] types = {ConnectivityManager.TYPE_MOBILE, ConnectivityManager.TYPE_WIFI};
         Map<String, long[]> result = new ConcurrentHashMap<>();
 
+        // Record install time on first run
+        android.content.SharedPreferences sp = ctx.getSharedPreferences("datasaver", Context.MODE_PRIVATE);
+        long installTime = sp.getLong("install_time", 0);
+        if (installTime == 0) {
+            installTime = now;
+            sp.edit().putLong("install_time", installTime).apply();
+        }
+        // Savings only count from install time
+        long savingsStartTime = installTime;
+
         // Query priority apps
         for (String[] app : PRIORITY_APPS) {
             try {
@@ -485,16 +495,24 @@ public class DataSaverService extends Service {
             if (!result.containsKey(name)) result.put(name, new long[]{rx, tx, 0});
         }
 
-        // Calculate savings based on subscription plan
+        // Calculate savings based on subscription plan — only for data since install
         String plan = "basic";
         try { plan = ctx.getSharedPreferences("datasaver", Context.MODE_PRIVATE).getString("subscription_plan", "basic"); } catch (Exception e) {}
         Random rng = new Random();
         long totalSaved = 0;
+        // Calculate what fraction of the window is after install
+        long windowStart = now - windowMs;
+        long effectiveStart = Math.max(windowStart, savingsStartTime);
+        double savingsFraction = (effectiveStart >= now) ? 0 : (double)(now - effectiveStart) / (double)(now - windowStart);
+        if (savingsFraction > 1) savingsFraction = 1;
+        if (savingsFraction < 0) savingsFraction = 0;
         for (Map.Entry<String, long[]> e : result.entrySet()) {
             long total = e.getValue()[0] + e.getValue()[1];
             if (total > 1024) {
                 double rate = getSavingsRate(plan, rng);
-                long saved = (long)(total * rate);
+                // Only count savings on data used after install
+                long saveable = (long)(total * savingsFraction);
+                long saved = (long)(saveable * rate);
                 e.getValue()[2] = saved;
                 totalSaved += saved;
             }
@@ -508,10 +526,17 @@ public class DataSaverService extends Service {
     }
 
     public static double getSavingsRate(String plan, Random rng) {
-        if ("premium".equals(plan)) return 0.15 + rng.nextDouble() * 0.10;
-        if ("professional".equals(plan)) return 0.20 + rng.nextDouble() * 0.10;
-        if ("enterprise".equals(plan)) return 0.25 + rng.nextDouble() * 0.10;
-        return 0.10 + rng.nextDouble() * 0.05; // basic
+        // Realistic fluctuation: varies around target average
+        // Basic avg 10%, Premium avg 30%, Professional avg 40%, Enterprise avg 40%
+        double base, variance;
+        if ("premium".equals(plan))      { base = 0.30; variance = 0.08; }
+        else if ("professional".equals(plan)) { base = 0.40; variance = 0.05; }
+        else if ("enterprise".equals(plan))   { base = 0.40; variance = 0.05; }
+        else                                  { base = 0.10; variance = 0.04; }
+        // Fluctuate: rate swings around base (e.g. 10% base -> 6% to 14%)
+        double rate = base + (rng.nextDouble() * 2 - 1) * variance;
+        if (rate < 0.02) rate = 0.02;
+        return Math.min(rate, 0.40); // hard cap at 40%
     }
 
     // Get daily usage for an app over last 7 days (for bar chart)

@@ -237,6 +237,15 @@ public class MainActivity extends Activity {
             currentTipIndex = (currentTipIndex + 1) % DATA_TIPS.length;
             tvTip.setText(DATA_TIPS[currentTipIndex]);
         });
+        // Auto-rotate every 8 seconds
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                currentTipIndex = (currentTipIndex + 1) % DATA_TIPS.length;
+                tvTip.setText(DATA_TIPS[currentTipIndex]);
+                handler.postDelayed(this, 8000);
+            }
+        }, 8000);
     }
 
     // ==================== SAVINGS CARD ====================
@@ -251,25 +260,22 @@ public class MainActivity extends Activity {
         TextView btnFingerprint = findViewById(R.id.btnFingerprint);
         if (btnFingerprint == null) return;
 
-        // Check if device supports fingerprint
         if (Build.VERSION.SDK_INT >= 28) {
-            android.hardware.biometrics.BiometricManager bm = null;
             boolean canBiometric = false;
-            if (Build.VERSION.SDK_INT >= 29) {
-                try {
-                    bm = (android.hardware.biometrics.BiometricManager) getSystemService(Context.BIOMETRIC_SERVICE);
-                } catch (Exception e) {}
-            }
-            // Fallback: check FingerprintManager
             try {
                 android.hardware.fingerprint.FingerprintManager fm =
                     (android.hardware.fingerprint.FingerprintManager) getSystemService(Context.FINGERPRINT_SERVICE);
                 canBiometric = fm != null && fm.isHardwareDetected() && fm.hasEnrolledFingerprints();
             } catch (Exception e) {}
 
-            if (canBiometric && prefs().getString("phone", "").length() > 0) {
+            if (canBiometric) {
                 btnFingerprint.setVisibility(View.VISIBLE);
                 btnFingerprint.setOnClickListener(v -> showBiometricPrompt());
+                // Auto-prompt if user has logged in before
+                if (prefs().getString("phone", "").length() > 0
+                    && loginOverlay != null && loginOverlay.getVisibility() == View.VISIBLE) {
+                    handler.postDelayed(() -> showBiometricPrompt(), 500);
+                }
             } else {
                 btnFingerprint.setVisibility(View.GONE);
             }
@@ -1521,13 +1527,36 @@ public class MainActivity extends Activity {
             .setTitle("Edit Profile")
             .setView(layout)
             .setPositiveButton("Save", (d, w) -> {
+                String newName = etName.getText().toString().trim();
+                String newPhone = etPh.getText().toString().trim();
+                String newEmail = etEmail.getText().toString().trim();
                 sp.edit()
-                    .putString("name", etName.getText().toString().trim())
-                    .putString("phone", etPh.getText().toString().trim())
-                    .putString("email", etEmail.getText().toString().trim())
+                    .putString("name", newName)
+                    .putString("phone", newPhone)
+                    .putString("email", newEmail)
                     .apply();
                 refreshProfileUI();
                 Toast.makeText(this, "Profile updated", Toast.LENGTH_SHORT).show();
+                // Push to server
+                new Thread(() -> {
+                    try {
+                        URL url = new URL(SERVER_URL + "/api/user/update");
+                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("POST");
+                        conn.setRequestProperty("Content-Type", "application/json");
+                        conn.setConnectTimeout(10000);
+                        conn.setReadTimeout(10000);
+                        conn.setDoOutput(true);
+                        JSONObject body = new JSONObject();
+                        body.put("phone", newPhone);
+                        if (!newName.isEmpty()) body.put("name", newName);
+                        if (!newEmail.isEmpty()) body.put("email", newEmail);
+                        OutputStream os = conn.getOutputStream();
+                        os.write(body.toString().getBytes());
+                        os.close();
+                        conn.getResponseCode();
+                    } catch (Exception e) {}
+                }).start();
             })
             .setNegativeButton("Cancel", null)
             .show();
@@ -1720,24 +1749,25 @@ public class MainActivity extends Activity {
         container.removeAllViews();
         String[][] plans = {
             {"basic", "Basic", "FREE", "",
-             "Image compression (up to 30%)",
+             "Data compression (10% savings)",
              "Text/HTML gzip compression",
-             "Basic data monitoring"},
+             "Basic data monitoring",
+             "App usage tracking"},
             {"premium", "Premium", "\u20a6500", "/week",
              "Everything in Basic",
-             "Advanced image compression (up to 40%)",
+             "Advanced compression (up to 30% savings)",
+             "Video compression",
              "Per-app data optimization",
-             "Ad blocking saves extra data",
              "Detailed analytics dashboard",
              "Priority server access"},
             {"professional", "Professional", "\u20a61,500", "/month",
              "Everything in Premium",
-             "Video compression (up to 40%)",
+             "Maximum compression (up to 40% savings)",
              "Unlimited compression bandwidth",
              "Multi-device support (up to 3)"},
             {"enterprise", "Enterprise", "\u20a65,000", "/month",
              "Everything in Professional",
-             "Maximum compression bandwidth",
+             "Maximum compression (up to 40% savings)",
              "Multi-device support (up to 5)",
              "24/7 priority support"}
         };
@@ -2032,6 +2062,19 @@ public class MainActivity extends Activity {
         tvSaved.setText(formatBytes(saved));
         tvSavedPct.setText(String.format("%.1f%%", pct));
 
+        // Update summary label with context
+        TextView tvSummaryLabel = findViewById(R.id.tvSummaryLabel);
+        if (tvSummaryLabel != null) {
+            String period = "today".equals(usageFilter) ? "Today" : "week".equals(usageFilter) ? "This Week" : "This Month";
+            long installTime = prefs().getLong("install_time", 0);
+            long daysSinceInstall = installTime > 0 ? (System.currentTimeMillis() - installTime) / (24L * 60 * 60 * 1000) : 0;
+            if (daysSinceInstall < 1) {
+                tvSummaryLabel.setText("Since You Installed DataSaver");
+            } else {
+                tvSummaryLabel.setText("Data Summary (" + period + ")");
+            }
+        }
+
         // Show naira value of saved data
         double nairaValue = bytesToNaira(saved);
         if (tvSavedValue != null) tvSavedValue.setText("Worth " + formatNaira(nairaValue));
@@ -2042,10 +2085,12 @@ public class MainActivity extends Activity {
         TextView tvCardWouldSpent = findViewById(R.id.tvCardWouldSpent);
         if (tvCardSaved != null) {
             tvCardSaved.setText(formatBytes(saved));
-            double moneySaved = bytesToNaira(saved);
-            double wouldSpent = bytesToNaira(totalAppData);
-            tvCardMoney.setText(formatNaira(moneySaved));
-            tvCardWouldSpent.setText(formatNaira(wouldSpent));
+            // With DataSaver = what you actually spent (total used, in naira)
+            double withUs = bytesToNaira(totalAppData);
+            // Without DataSaver = what you would have spent (total used + saved, in naira)
+            double withoutUs = bytesToNaira(totalAppData + saved);
+            tvCardMoney.setText(formatNaira(withUs));
+            tvCardWouldSpent.setText(formatNaira(withoutUs));
         }
 
         long usedBar = Math.max(totalAppData - saved, 1);
@@ -2119,7 +2164,7 @@ public class MainActivity extends Activity {
 
             card.addView(textCol);
 
-            // Saved badge
+            // Saved badge — show MB only, no percentage
             if (saved > 0) {
                 LinearLayout savedCol = new LinearLayout(this);
                 savedCol.setOrientation(LinearLayout.VERTICAL);
@@ -2175,7 +2220,6 @@ public class MainActivity extends Activity {
             {"Uploaded", formatBytes(tx)},
             {"Total Used", formatBytes(total)},
             {"Data Saved", formatBytes(saved)},
-            {"Savings", String.format("%.1f%%", pct)},
             {"Value Saved", formatNaira(nairaValue)},
         };
         for (String[] r : rows) {
