@@ -138,6 +138,8 @@ app.post('/api/savings/sync', async (req, res) => {
   try {
     const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Update user totals
     await supabase.from('users').update({
       total_saved_bytes: saved_bytes || 0,
       total_blocked_requests: blocked_requests || 0,
@@ -145,7 +147,68 @@ app.post('/api/savings/sync', async (req, res) => {
       bg_bytes_saved: bg_bytes || 0,
       last_savings_sync: new Date().toISOString()
     }).eq('id', user.id);
+
+    // Also save daily snapshot
+    const today = new Date().toISOString().split('T')[0];
+    const { data: existing } = await supabase.from('savings_history')
+      .select('id').eq('user_id', user.id).eq('date', today).single();
+    if (existing) {
+      await supabase.from('savings_history').update({
+        saved_bytes: saved_bytes || 0,
+        blocked_requests: blocked_requests || 0,
+        ad_bytes: ad_bytes || 0,
+        bg_bytes: bg_bytes || 0
+      }).eq('id', existing.id);
+    } else {
+      await supabase.from('savings_history').insert({
+        user_id: user.id, date: today,
+        saved_bytes: saved_bytes || 0,
+        blocked_requests: blocked_requests || 0,
+        ad_bytes: ad_bytes || 0,
+        bg_bytes: bg_bytes || 0
+      });
+    }
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/savings/:phone  — get savings history
+app.get('/api/savings/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests, ad_bytes_saved, bg_bytes_saved').eq('phone', req.params.phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Get daily history (last 30 days)
+    const { data: history } = await supabase.from('savings_history')
+      .select('*').eq('user_id', user.id)
+      .order('date', { ascending: false }).limit(30);
+
+    // Calculate today/week/month totals
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    let todaySaved = 0, weekSaved = 0, monthSaved = 0;
+    let todayBlocked = 0, weekBlocked = 0, monthBlocked = 0;
+    if (history) {
+      for (const h of history) {
+        if (h.date === todayStr) { todaySaved = h.saved_bytes; todayBlocked = h.blocked_requests; }
+        if (h.date >= weekAgo) { weekSaved += h.saved_bytes; weekBlocked += h.blocked_requests; }
+        if (h.date >= monthAgo) { monthSaved += h.saved_bytes; monthBlocked += h.blocked_requests; }
+      }
+    }
+
+    res.json({
+      total_saved: user.total_saved_bytes || 0,
+      total_blocked: user.total_blocked_requests || 0,
+      today: { saved: todaySaved, blocked: todayBlocked },
+      week: { saved: weekSaved, blocked: weekBlocked },
+      month: { saved: monthSaved, blocked: monthBlocked },
+      history: history || []
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
