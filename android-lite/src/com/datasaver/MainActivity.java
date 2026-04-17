@@ -224,6 +224,15 @@ public class MainActivity extends Activity {
         filterMonth.setOnClickListener(v -> applyFilter("month", filterToday, filterWeek, filterMonth));
 
         restoreSavedStats();
+        // Restore real VPN savings from SharedPreferences immediately
+        long savedAdBytes = prefs().getLong("real_ad_bytes", 0);
+        long savedBgBytes = prefs().getLong("real_bg_bytes", 0);
+        long savedAdReqs = prefs().getLong("real_ad_requests", 0);
+        long savedBgSyncs = prefs().getLong("real_bg_syncs", 0);
+        if (savedAdBytes > DataSaverVpnService.blockedAdBytes.get()) DataSaverVpnService.blockedAdBytes.set(savedAdBytes);
+        if (savedBgBytes > DataSaverVpnService.blockedBgBytes.get()) DataSaverVpnService.blockedBgBytes.set(savedBgBytes);
+        if (savedAdReqs > DataSaverVpnService.blockedAdRequests.get()) DataSaverVpnService.blockedAdRequests.set(savedAdReqs);
+        if (savedBgSyncs > DataSaverVpnService.blockedBgSyncs.get()) DataSaverVpnService.blockedBgSyncs.set(savedBgSyncs);
         // Show loading state until data is ready
         tvUsed.setText("...");
         tvSaved.setText("...");
@@ -296,11 +305,17 @@ public class MainActivity extends Activity {
 
     @SuppressWarnings("deprecation")
     private void showBiometricPrompt() {
+        // Only allow fingerprint if we have a saved phone number
+        String savedPhone = prefs().getString("phone", "");
+        if (savedPhone.isEmpty()) {
+            Toast.makeText(this, "Please login with your phone number first", Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (Build.VERSION.SDK_INT >= 28) {
             android.hardware.biometrics.BiometricPrompt.Builder builder =
                 new android.hardware.biometrics.BiometricPrompt.Builder(this);
             builder.setTitle("DataSaver Login");
-            builder.setSubtitle("Use your fingerprint to login");
+            builder.setSubtitle("Use your fingerprint to login as " + savedPhone);
             builder.setNegativeButton("Use PIN", getMainExecutor(), (dialog, which) -> {});
             android.hardware.biometrics.BiometricPrompt prompt = builder.build();
             prompt.authenticate(
@@ -310,14 +325,18 @@ public class MainActivity extends Activity {
                     @Override
                     public void onAuthenticationSucceeded(
                             android.hardware.biometrics.BiometricPrompt.AuthenticationResult result) {
+                        // Load user data from server using saved phone
                         loginOverlay.setVisibility(View.GONE);
+                        fetchWalletBalance(); // This also syncs name/email from server
                         refreshProfileUI();
-                        fetchWalletBalance();
-                        Toast.makeText(MainActivity.this, "Welcome back!", Toast.LENGTH_SHORT).show();
+                        loadAppUsageBackground();
+                        String name = prefs().getString("name", "");
+                        String welcome = (name.isEmpty() || "null".equals(name)) ? "User" : name;
+                        Toast.makeText(MainActivity.this, "Welcome back, " + welcome + "!", Toast.LENGTH_SHORT).show();
                     }
                     @Override
                     public void onAuthenticationError(int errorCode, CharSequence errString) {
-                        if (errorCode != 10 && errorCode != 13) { // not user cancel
+                        if (errorCode != 10 && errorCode != 13) {
                             Toast.makeText(MainActivity.this, "Auth error: " + errString, Toast.LENGTH_SHORT).show();
                         }
                     }
@@ -1626,32 +1645,53 @@ public class MainActivity extends Activity {
                 String newName = etName.getText().toString().trim();
                 String newPhone = etPh.getText().toString().trim();
                 String newEmail = etEmail.getText().toString().trim();
+                // Use the ORIGINAL phone to find the record on server
+                String originalPhone = safeGet("phone");
                 sp.edit()
                     .putString("name", newName)
                     .putString("phone", newPhone)
                     .putString("email", newEmail)
                     .apply();
                 refreshProfileUI();
-                Toast.makeText(this, "Profile updated", Toast.LENGTH_SHORT).show();
-                // Push to server
+                Toast.makeText(this, "Saving to server...", Toast.LENGTH_SHORT).show();
+                // Push to server using ORIGINAL phone as lookup key
                 new Thread(() -> {
                     try {
                         URL url = new URL(SERVER_URL + "/api/user/update");
                         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                         conn.setRequestMethod("POST");
                         conn.setRequestProperty("Content-Type", "application/json");
-                        conn.setConnectTimeout(10000);
-                        conn.setReadTimeout(10000);
+                        conn.setConnectTimeout(15000);
+                        conn.setReadTimeout(15000);
                         conn.setDoOutput(true);
                         JSONObject body = new JSONObject();
-                        body.put("phone", newPhone);
-                        if (!newName.isEmpty()) body.put("name", newName);
-                        if (!newEmail.isEmpty()) body.put("email", newEmail);
+                        body.put("phone", originalPhone.isEmpty() ? newPhone : originalPhone);
+                        body.put("name", newName);
+                        body.put("email", newEmail);
+                        if (!newPhone.equals(originalPhone) && !newPhone.isEmpty()) {
+                            body.put("new_phone", newPhone);
+                        }
                         OutputStream os = conn.getOutputStream();
                         os.write(body.toString().getBytes());
                         os.close();
-                        conn.getResponseCode();
-                    } catch (Exception e) {}
+                        int code = conn.getResponseCode();
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                            code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) sb.append(line);
+                        reader.close();
+                        JSONObject res = new JSONObject(sb.toString());
+                        handler.post(() -> {
+                            if (res.optBoolean("success")) {
+                                Toast.makeText(this, "Profile saved", Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(this, "Save failed: " + res.optString("error", ""), Toast.LENGTH_SHORT).show();
+                            }
+                        });
+                    } catch (Exception e) {
+                        handler.post(() -> Toast.makeText(this, "Could not save to server", Toast.LENGTH_SHORT).show());
+                    }
                 }).start();
             })
             .setNegativeButton("Cancel", null)
@@ -2111,6 +2151,15 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // Restore savings counters in case app was backgrounded
+        long savedAdBytes = prefs().getLong("real_ad_bytes", 0);
+        long savedBgBytes = prefs().getLong("real_bg_bytes", 0);
+        long savedAdReqs = prefs().getLong("real_ad_requests", 0);
+        long savedBgSyncs = prefs().getLong("real_bg_syncs", 0);
+        if (savedAdBytes > DataSaverVpnService.blockedAdBytes.get()) DataSaverVpnService.blockedAdBytes.set(savedAdBytes);
+        if (savedBgBytes > DataSaverVpnService.blockedBgBytes.get()) DataSaverVpnService.blockedBgBytes.set(savedBgBytes);
+        if (savedAdReqs > DataSaverVpnService.blockedAdRequests.get()) DataSaverVpnService.blockedAdRequests.set(savedAdReqs);
+        if (savedBgSyncs > DataSaverVpnService.blockedBgSyncs.get()) DataSaverVpnService.blockedBgSyncs.set(savedBgSyncs);
         updateUI();
         updateSummary();
         fetchWalletBalance();
