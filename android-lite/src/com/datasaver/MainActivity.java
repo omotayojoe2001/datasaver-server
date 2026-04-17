@@ -201,8 +201,13 @@ public class MainActivity extends Activity {
         fetchWalletBalance();
         tvSavedValue = findViewById(R.id.tvSavedValue);
 
-        // Load app usage immediately (no need to turn on DataSaver)
-        loadAppUsageBackground();
+        // Load app usage in background (show loading state first)
+        tvAppUsageEmpty.setVisibility(View.VISIBLE);
+        tvAppUsageEmpty.setText("Loading your data usage...");
+        new Thread(() -> {
+            buildIconCache();
+            handler.post(() -> loadAppUsageBackground());
+        }).start();
 
         findViewById(R.id.btnViewAll).setOnClickListener(v -> {
             showAllApps = !showAllApps;
@@ -219,9 +224,13 @@ public class MainActivity extends Activity {
         filterMonth.setOnClickListener(v -> applyFilter("month", filterToday, filterWeek, filterMonth));
 
         restoreSavedStats();
+        // Show loading state until data is ready
+        tvUsed.setText("...");
+        tvSaved.setText("...");
+        tvSavedPct.setText("...");
         updateUI();
-        updateSummary();
-        updateAppCards();
+        // Delay summary update until background data loads
+        handler.postDelayed(() -> { updateSummary(); updateAppCards(); }, 1500);
         initTips();
         initSavingsCard();
         initFingerprintLogin();
@@ -334,6 +343,8 @@ public class MainActivity extends Activity {
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) {
             loginOverlay.setVisibility(View.VISIBLE);
+            // New users see signup first
+            switchAuthTab(true, (TextView) findViewById(R.id.tabLogin), (TextView) findViewById(R.id.tabSignup));
         }
 
         TextView tabLogin = findViewById(R.id.tabLogin);
@@ -384,17 +395,22 @@ public class MainActivity extends Activity {
                         if (code < 400 && res.optBoolean("success")) {
                             String rName = res.isNull("name") ? "" : res.optString("name", "");
                             String rEmail = res.isNull("email") ? "" : res.optString("email", "");
+                            String rPhone = res.optString("phone", "");
                             prefs().edit()
                                 .putString("user_id", res.optString("user_id"))
                                 .putString("name", rName)
-                                .putString("phone", res.optString("phone", ""))
+                                .putString("phone", rPhone)
                                 .putString("email", rEmail)
                                 .putString("subscription_plan", res.optString("subscription_plan", "basic"))
                                 .apply();
                             loginOverlay.setVisibility(View.GONE);
                             refreshProfileUI();
                             fetchWalletBalance();
-                            String welcome = rName.isEmpty() ? "User" : rName;
+                            // If name/email missing from server, push from signup data
+                            if ((rName.isEmpty() || "null".equals(rName)) && !identity.contains("@")) {
+                                // Logged in with phone, name might be missing
+                            }
+                            String welcome = (rName.isEmpty() || "null".equals(rName)) ? "User" : rName;
                             Toast.makeText(this, "Welcome back, " + welcome + "!", Toast.LENGTH_SHORT).show();
                         } else {
                             showAuthError(tvLoginStatus, res.optString("error", "Login failed"));
@@ -551,6 +567,22 @@ public class MainActivity extends Activity {
                 }
                 if (!serverEmail.isEmpty() && !"null".equals(serverEmail)) {
                     prefs().edit().putString("email", serverEmail).apply();
+                }
+                // Restore profile photo from server
+                String serverPhoto = res.isNull("photo_base64") ? "" : res.optString("photo_base64", "");
+                if (!serverPhoto.isEmpty() && !"null".equals(serverPhoto)) {
+                    try {
+                        byte[] photoBytes = android.util.Base64.decode(serverPhoto, android.util.Base64.NO_WRAP);
+                        Bitmap photoBmp = BitmapFactory.decodeByteArray(photoBytes, 0, photoBytes.length);
+                        if (photoBmp != null) {
+                            File pf = new File(getFilesDir(), "profile.jpg");
+                            FileOutputStream pfos = new FileOutputStream(pf);
+                            photoBmp.compress(Bitmap.CompressFormat.JPEG, 80, pfos);
+                            pfos.close();
+                            prefs().edit().putString("photo_path", pf.getAbsolutePath()).apply();
+                            handler.post(() -> { setCircularPhoto(photoBmp); });
+                        }
+                    } catch (Exception pe) {}
                 }
                 handler.post(() -> {
                     tvWalletBalance.setText(String.format("\u20a6%.0f", bal));
@@ -757,13 +789,13 @@ public class MainActivity extends Activity {
 
                 LinearLayout card = new LinearLayout(this);
                 card.setOrientation(LinearLayout.HORIZONTAL);
-                card.setBackgroundColor(0xFFFFFFFF);
+                card.setBackground(getResources().getDrawable(R.drawable.card_bg));
                 card.setPadding(dp(14), dp(12), dp(14), dp(12));
                 card.setGravity(Gravity.CENTER_VERTICAL);
-                card.setElevation(2);
+                card.setElevation(dp(3));
                 LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                cp.bottomMargin = dp(6);
+                cp.bottomMargin = dp(8);
                 card.setLayoutParams(cp);
 
                 LinearLayout left = new LinearLayout(this);
@@ -1266,12 +1298,12 @@ public class MainActivity extends Activity {
 
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
-            card.setBackgroundColor(0xFFFFFFFF);
+            card.setBackground(getResources().getDrawable(R.drawable.card_bg));
             card.setPadding(dp(14), dp(12), dp(14), dp(12));
-            card.setElevation(2);
+            card.setElevation(dp(3));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            lp.bottomMargin = dp(8);
+            lp.bottomMargin = dp(10);
             card.setLayoutParams(lp);
 
             LinearLayout row = new LinearLayout(this);
@@ -1327,13 +1359,13 @@ public class MainActivity extends Activity {
     private void addUsageCard(String appName, String amount, long total, long saved) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
-        card.setBackgroundColor(0xFFFFFFFF);
-        card.setPadding(dp(12), dp(12), dp(12), dp(12));
-        card.setElevation(2);
+        card.setBackground(getResources().getDrawable(R.drawable.card_bg));
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setElevation(dp(3));
         card.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = dp(8);
+        lp.bottomMargin = dp(10);
         card.setLayoutParams(lp);
 
         // App icon
@@ -1757,6 +1789,28 @@ public class MainActivity extends Activity {
                     prefs().edit().putString("photo_path", f.getAbsolutePath()).apply();
                     setCircularPhoto(bmp);
                     Toast.makeText(this, "Photo updated", Toast.LENGTH_SHORT).show();
+                    // Upload to server
+                    new Thread(() -> {
+                        try {
+                            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                            bmp.compress(Bitmap.CompressFormat.JPEG, 50, baos);
+                            String base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP);
+                            URL url = new URL(SERVER_URL + "/api/user/update");
+                            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                            conn.setRequestMethod("POST");
+                            conn.setRequestProperty("Content-Type", "application/json");
+                            conn.setConnectTimeout(15000);
+                            conn.setReadTimeout(15000);
+                            conn.setDoOutput(true);
+                            JSONObject body = new JSONObject();
+                            body.put("phone", prefs().getString("phone", ""));
+                            body.put("photo_base64", base64);
+                            OutputStream os = conn.getOutputStream();
+                            os.write(body.toString().getBytes());
+                            os.close();
+                            conn.getResponseCode();
+                        } catch (Exception e) {}
+                    }).start();
                 }
             } catch (Exception e) {
                 Toast.makeText(this, "Failed to load photo", Toast.LENGTH_SHORT).show();
@@ -1846,9 +1900,9 @@ public class MainActivity extends Activity {
 
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
-            card.setBackgroundColor(isEnterprise ? 0xFF1565C0 : 0xFFFFFFFF);
+            card.setBackground(getResources().getDrawable(isEnterprise ? R.drawable.btn_blue_rounded : R.drawable.card_bg));
             card.setPadding(dp(16), dp(16), dp(16), dp(16));
-            card.setElevation(isEnterprise ? 4 : 2);
+            card.setElevation(isEnterprise ? dp(4) : dp(3));
             LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             cp.bottomMargin = dp(12);

@@ -69,9 +69,7 @@ app.post('/api/register', async (req, res) => {
       if (existing) return res.status(409).json({ error: 'Phone number already registered. Please login instead.' });
     }
 
-    const row = { email, pin: pin || '0000' };
-    if (name) row.name = name;
-    if (phone) row.phone = phone;
+    const row = { email, pin: pin || '0000', name: name || '', phone: phone || '' };
     const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan').single();
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'basic', message: 'Account created' });
@@ -98,14 +96,15 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// POST /api/user/update  { phone, name, email }
+// POST /api/user/update  { phone, name, email, photo_base64 }
 app.post('/api/user/update', async (req, res) => {
-  const { phone, name, email } = req.body;
+  const { phone, name, email, photo_base64 } = req.body;
   if (!phone) return res.status(400).json({ error: 'phone required' });
   try {
     const updates = {};
     if (name !== undefined && name !== null && name !== 'null') updates.name = name;
     if (email !== undefined && email !== null && email !== 'null') updates.email = email;
+    if (photo_base64) updates.photo_base64 = photo_base64;
     if (Object.keys(updates).length === 0) return res.json({ success: true, message: 'Nothing to update' });
     const { error } = await supabase.from('users').update(updates).eq('phone', phone);
     if (error) return res.status(500).json({ error: error.message });
@@ -139,7 +138,7 @@ app.post('/api/savings/sync', async (req, res) => {
 app.get('/api/user/:phone', async (req, res) => {
   try {
     const { data, error } = await supabase.from('users')
-      .select('id, phone, name, email, wallet_balance, subscription_plan, subscription_expires_at, created_at')
+      .select('id, phone, name, email, wallet_balance, subscription_plan, subscription_expires_at, created_at, photo_base64')
       .eq('phone', req.params.phone)
       .single();
     if (error) return res.status(404).json({ error: 'User not found' });
