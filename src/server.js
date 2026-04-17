@@ -69,9 +69,7 @@ app.post('/api/register', async (req, res) => {
       if (existing) return res.status(409).json({ error: 'Phone number already registered. Please login instead.' });
     }
 
-    const row = { email, pin: pin || '0000' };
-    if (name) row.name = name;
-    if (phone) row.phone = phone;
+    const row = { email, pin: pin || '0000', name: name || '', phone: phone || '' };
     const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan').single();
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'basic', message: 'Account created' });
@@ -87,12 +85,67 @@ app.post('/api/login', async (req, res) => {
 
   try {
     let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at');
-    if (email) query = query.eq('email', email);
-    else query = query.eq('phone', phone);
-    const { data: user, error } = await query.single();
-    if (error || !user) return res.status(404).json({ error: 'Account not found. Please sign up first.' });
-    if (user.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
-    res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, subscription_plan: user.subscription_plan || 'basic', message: 'Login successful' });
+    if (email) {
+      // Try email first, then fall back to treating it as phone
+      const { data: emailUser } = await query.eq('email', email).single();
+      if (emailUser) {
+        if (emailUser.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
+        return res.json({ success: true, user_id: emailUser.id, name: emailUser.name, phone: emailUser.phone, email: emailUser.email, wallet_balance: emailUser.wallet_balance, subscription_plan: emailUser.subscription_plan || 'basic', message: 'Login successful' });
+      }
+      // Email not found, try as phone number
+      const { data: phoneUser } = await supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at').eq('phone', email).single();
+      if (phoneUser) {
+        if (phoneUser.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
+        return res.json({ success: true, user_id: phoneUser.id, name: phoneUser.name, phone: phoneUser.phone, email: phoneUser.email, wallet_balance: phoneUser.wallet_balance, subscription_plan: phoneUser.subscription_plan || 'basic', message: 'Login successful' });
+      }
+      return res.status(404).json({ error: 'Account not found. Please sign up first.' });
+    } else {
+      query = query.eq('phone', phone);
+      const { data: user, error } = await query.single();
+      if (error || !user) return res.status(404).json({ error: 'Account not found. Please sign up first.' });
+      if (user.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
+      res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, subscription_plan: user.subscription_plan || 'basic', message: 'Login successful' });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/user/update  { phone, name, email, new_phone, photo_base64 }
+app.post('/api/user/update', async (req, res) => {
+  const { phone, name, email, new_phone, photo_base64 } = req.body;
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  try {
+    const updates = {};
+    if (name !== undefined && name !== null) updates.name = name;
+    if (email !== undefined && email !== null) updates.email = email;
+    if (new_phone) updates.phone = new_phone;
+    if (photo_base64) updates.photo_base64 = photo_base64;
+    if (Object.keys(updates).length === 0) return res.json({ success: true, message: 'Nothing to update' });
+    const { data, error } = await supabase.from('users').update(updates).eq('phone', phone).select();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data || data.length === 0) return res.status(404).json({ error: 'User not found with phone: ' + phone });
+    res.json({ success: true, message: 'Profile updated' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/savings/sync  { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes }
+app.post('/api/savings/sync', async (req, res) => {
+  const { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes } = req.body;
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    await supabase.from('users').update({
+      total_saved_bytes: saved_bytes || 0,
+      total_blocked_requests: blocked_requests || 0,
+      ad_bytes_saved: ad_bytes || 0,
+      bg_bytes_saved: bg_bytes || 0,
+      last_savings_sync: new Date().toISOString()
+    }).eq('id', user.id);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -102,7 +155,7 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/user/:phone', async (req, res) => {
   try {
     const { data, error } = await supabase.from('users')
-      .select('id, phone, name, email, wallet_balance, subscription_plan, subscription_expires_at, created_at')
+      .select('id, phone, name, email, wallet_balance, subscription_plan, subscription_expires_at, created_at, photo_base64')
       .eq('phone', req.params.phone)
       .single();
     if (error) return res.status(404).json({ error: 'User not found' });
