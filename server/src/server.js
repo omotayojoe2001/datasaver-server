@@ -115,6 +115,26 @@ app.post('/api/user/update', async (req, res) => {
   }
 });
 
+// POST /api/savings/sync  { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes }
+app.post('/api/savings/sync', async (req, res) => {
+  const { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes } = req.body;
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    await supabase.from('users').update({
+      total_saved_bytes: saved_bytes || 0,
+      total_blocked_requests: blocked_requests || 0,
+      ad_bytes_saved: ad_bytes || 0,
+      bg_bytes_saved: bg_bytes || 0,
+      last_savings_sync: new Date().toISOString()
+    }).eq('id', user.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/user/:phone
 app.get('/api/user/:phone', async (req, res) => {
   try {

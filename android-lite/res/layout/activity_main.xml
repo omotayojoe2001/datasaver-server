@@ -186,78 +186,94 @@
                 android:elevation="4dp">
 
                 <!-- Savings Card: Data Saved / Money Saved / Would Have Spent -->
+                <!-- Real Savings -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
+                    android:orientation="vertical"
                     android:layout_marginBottom="12dp"
-                    android:background="#E8F5E9"
+                    android:background="@drawable/card_green"
                     android:padding="12dp">
 
-                    <LinearLayout
-                        android:layout_width="0dp"
+                    <TextView
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical"
-                        android:gravity="center">
-                        <TextView
-                            android:id="@+id/tvCardDataSaved"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="0 B"
-                            android:textSize="16sp"
-                            android:textStyle="bold"
-                            android:textColor="#1B5E20" />
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Data Saved"
-                            android:textSize="10sp"
-                            android:textColor="#555555" />
-                    </LinearLayout>
+                        android:text="Real Savings"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20"
+                        android:layout_marginBottom="8dp" />
 
                     <LinearLayout
-                        android:layout_width="0dp"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical"
-                        android:gravity="center">
-                        <TextView
-                            android:id="@+id/tvCardMoneySaved"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="₦0"
-                            android:textSize="16sp"
-                            android:textStyle="bold"
-                            android:textColor="#43A047" />
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="With DataSaver"
-                            android:textSize="10sp"
-                            android:textColor="#555555" />
-                    </LinearLayout>
+                        android:orientation="horizontal">
 
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical"
-                        android:gravity="center">
-                        <TextView
-                            android:id="@+id/tvCardWouldSpent"
-                            android:layout_width="wrap_content"
+                        <LinearLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:text="₦0"
-                            android:textSize="16sp"
-                            android:textStyle="bold"
-                            android:textColor="#D32F2F" />
-                        <TextView
-                            android:layout_width="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:gravity="center">
+                            <TextView
+                                android:id="@+id/tvRealAdsBlocked"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:textColor="#1B5E20" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Blocked"
+                                android:textSize="10sp"
+                                android:textColor="#555555" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:text="Without DataSaver"
-                            android:textSize="10sp"
-                            android:textColor="#555555" />
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:gravity="center">
+                            <TextView
+                                android:id="@+id/tvRealDataSaved"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0 KB"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:textColor="#43A047" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Data Saved"
+                                android:textSize="10sp"
+                                android:textColor="#555555" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:gravity="center">
+                            <TextView
+                                android:id="@+id/tvRealMoneySaved"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="N0"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:textColor="#E65100" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Money Saved"
+                                android:textSize="10sp"
+                                android:textColor="#555555" />
+                        </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>
 
@@ -808,7 +824,7 @@
                 android:textSize="15sp"
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
-                android:background="#1565C0"
+                android:background="@drawable/btn_rounded"
                 android:layout_marginTop="16dp"
                 android:layout_marginBottom="16dp" />
 
@@ -957,7 +973,7 @@
             <!-- Savings Summary -->
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Savings Summary" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="12dp" />
 
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#E8F5E9" android:padding="14dp" android:layout_marginBottom="8dp" android:elevation="2dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="@drawable/card_green" android:padding="14dp" android:layout_marginBottom="8dp" android:elevation="2dp">
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Total Data Saved" android:textSize="13sp" android:textColor="#555555" />
                 <TextView android:id="@+id/tvHistorySaved" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0 B" android:textSize="28sp" android:textStyle="bold" android:textColor="#1B5E20" android:layout_marginTop="4dp" />
                 <TextView android:id="@+id/tvHistorySavedPct" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="You saved 0% of your data" android:textSize="12sp" android:textColor="#43A047" android:layout_marginTop="4dp" />
@@ -1103,6 +1119,16 @@
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Data Saving Preferences" android:textSize="13sp" android:textColor="#999999" android:layout_marginBottom="8dp" />
 
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:elevation="2dp" android:layout_marginBottom="16dp">
+                <LinearLayout android:id="@+id/rowBgGuard" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Background Guard" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvBgGuard" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ON" android:textSize="13sp" android:textColor="#43A047" android:textStyle="bold" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:id="@+id/rowBypassApps" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="VPN Bypass Apps" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text=">" android:textSize="16sp" android:textColor="#CCCCCC" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
                 <LinearLayout android:id="@+id/rowImageQuality" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
                     <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Image Quality" android:textSize="15sp" android:textColor="#333333" />
                     <TextView android:id="@+id/tvImageQuality" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Medium >" android:textSize="13sp" android:textColor="#1565C0" />

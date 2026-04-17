@@ -448,6 +448,9 @@ public class DataSaverService extends Service {
         }
         // Savings only count from install time
         long savingsStartTime = installTime;
+        long windowStart = now - windowMs;
+        long effectiveStart = Math.max(windowStart, installTime);
+        if (effectiveStart >= now) { appDataUsage.clear(); totalSavedBytes = 0; savedPercent = 0; return; }
 
         // Query priority apps
         for (String[] app : PRIORITY_APPS) {
@@ -457,7 +460,7 @@ public class DataSaverService extends Service {
                 long totalRx = 0, totalTx = 0;
                 for (int type : types) {
                     try {
-                        NetworkStats stats = nsm.queryDetailsForUid(type, null, now - windowMs, now, uid);
+                        NetworkStats stats = nsm.queryDetailsForUid(type, null, effectiveStart, now, uid);
                         if (stats == null) continue;
                         NetworkStats.Bucket bucket = new NetworkStats.Bucket();
                         while (stats.hasNextBucket()) { stats.getNextBucket(bucket); totalRx += bucket.getRxBytes(); totalTx += bucket.getTxBytes(); }
@@ -472,7 +475,7 @@ public class DataSaverService extends Service {
         Map<Integer, long[]> uidData = new HashMap<>();
         for (int type : types) {
             try {
-                NetworkStats stats = nsm.querySummary(type, null, now - windowMs, now);
+                NetworkStats stats = nsm.querySummary(type, null, effectiveStart, now);
                 if (stats == null) continue;
                 NetworkStats.Bucket bucket = new NetworkStats.Bucket();
                 while (stats.hasNextBucket()) {
@@ -495,14 +498,12 @@ public class DataSaverService extends Service {
             if (!result.containsKey(name)) result.put(name, new long[]{rx, tx, 0});
         }
 
-        // Calculate savings based on subscription plan — only for data since install
+        // Calculate savings based on subscription plan  -  only for data since install
         String plan = "basic";
         try { plan = ctx.getSharedPreferences("datasaver", Context.MODE_PRIVATE).getString("subscription_plan", "basic"); } catch (Exception e) {}
         Random rng = new Random();
         long totalSaved = 0;
         // Calculate what fraction of the window is after install
-        long windowStart = now - windowMs;
-        long effectiveStart = Math.max(windowStart, savingsStartTime);
         double savingsFraction = (effectiveStart >= now) ? 0 : (double)(now - effectiveStart) / (double)(now - windowStart);
         if (savingsFraction > 1) savingsFraction = 1;
         if (savingsFraction < 0) savingsFraction = 0;

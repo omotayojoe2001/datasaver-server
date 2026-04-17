@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Map;
+import java.util.Set;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -1417,6 +1418,14 @@ public class MainActivity extends Activity {
         findViewById(R.id.rowWifiCompress).setOnClickListener(v -> togglePref("wifi_compress", tvWifiCompress));
         findViewById(R.id.rowPrivacy).setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://datasaver-server.onrender.com/privacy"))));
         findViewById(R.id.btnLogout).setOnClickListener(v -> logout());
+
+        // VPN Bypass List (Split Tunneling)
+        View rowBypass = findViewById(R.id.rowBypassApps);
+        if (rowBypass != null) rowBypass.setOnClickListener(v -> showBypassAppsDialog());
+
+        // Background Guard toggle
+        View rowBgGuard = findViewById(R.id.rowBgGuard);
+        if (rowBgGuard != null) rowBgGuard.setOnClickListener(v -> togglePref("bg_block_enabled", findViewById(R.id.tvBgGuard)));
     }
 
     private void refreshProfileUI() {
@@ -1438,6 +1447,14 @@ public class MainActivity extends Activity {
 
         tvWifiCompress.setText(sp.getBoolean("wifi_compress", false) ? "ON" : "OFF");
         tvWifiCompress.setTextColor(sp.getBoolean("wifi_compress", false) ? 0xFF43A047 : 0xFFD32F2F);
+
+        // Background Guard status
+        TextView tvBgGuard = findViewById(R.id.tvBgGuard);
+        if (tvBgGuard != null) {
+            boolean bgOn = sp.getBoolean("bg_block_enabled", true);
+            tvBgGuard.setText(bgOn ? "ON" : "OFF");
+            tvBgGuard.setTextColor(bgOn ? 0xFF43A047 : 0xFFD32F2F);
+        }
 
         tvServerAddr.setText("*****");
         String subPlan = sp.getString("subscription_plan", "basic");
@@ -1493,6 +1510,53 @@ public class MainActivity extends Activity {
         prefs().edit().putString("image_quality", next).apply();
         tvImageQuality.setText(next + " >");
         Toast.makeText(this, "Image quality: " + next, Toast.LENGTH_SHORT).show();
+    }
+
+    private void showBypassAppsDialog() {
+        // Get current bypass list
+        String current = prefs().getString("bypass_apps", "");
+        Set<String> bypassed = new java.util.HashSet<>();
+        if (!current.isEmpty()) {
+            for (String pkg : current.split(",")) bypassed.add(pkg.trim());
+        }
+
+        // Common apps that might need bypassing
+        String[][] apps = {
+            {"Banking Apps", "com.gtbank.gtworldapp,com.accessbank.accessbankapp,com.zenithbank.eazymoney,com.firstbanknigeria.firstmobile,ng.opay,com.palmpay.app"},
+            {"WhatsApp", "com.whatsapp"},
+            {"WhatsApp Business", "com.whatsapp.w4b"},
+            {"Google Play Store", "com.android.vending"},
+            {"Chrome", "com.android.chrome"},
+            {"YouTube", "com.google.android.youtube"},
+            {"Netflix", "com.netflix.mediaclient"},
+            {"Spotify", "com.spotify.music"},
+        };
+
+        String[] names = new String[apps.length];
+        boolean[] checked = new boolean[apps.length];
+        for (int i = 0; i < apps.length; i++) {
+            names[i] = apps[i][0];
+            for (String pkg : apps[i][1].split(",")) {
+                if (bypassed.contains(pkg.trim())) { checked[i] = true; break; }
+            }
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("VPN Bypass List")
+            .setMultiChoiceItems(names, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
+            .setPositiveButton("Save", (d, w) -> {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < apps.length; i++) {
+                    if (checked[i]) {
+                        if (sb.length() > 0) sb.append(",");
+                        sb.append(apps[i][1]);
+                    }
+                }
+                prefs().edit().putString("bypass_apps", sb.toString()).apply();
+                Toast.makeText(this, "Bypass list saved. Restart DataSaver to apply.", Toast.LENGTH_LONG).show();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
     }
 
     private String safeGet(String key) {
@@ -2005,7 +2069,16 @@ public class MainActivity extends Activity {
 
     private void updateUI() {
         if (DataSaverService.isRunning) {
-            tvStatus.setText(DataSaverVpnService.isVpnRunning ? "VPN Connected \u2014 Saving Data" : "Connected \u2014 Saving Data");
+            long ads = DataSaverVpnService.blockedAdRequests.get();
+            long bgSyncs = DataSaverVpnService.blockedBgSyncs.get();
+            long totalSavedKB = (DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get()) / 1024;
+            String statusMsg = DataSaverVpnService.isVpnRunning ? "VPN Connected" : "Connected";
+            if (ads > 0 || bgSyncs > 0) {
+                statusMsg += " \u2014 Saved " + formatBytes(DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get());
+            } else {
+                statusMsg += " \u2014 Protecting your data";
+            }
+            tvStatus.setText(statusMsg);
             btnConnect.setText("ON");
             btnConnect.setBackgroundResource(R.drawable.circle_on);
         } else {
@@ -2054,12 +2127,15 @@ public class MainActivity extends Activity {
         long totalAppData = 0;
         for (long[] v : DataSaverService.appDataUsage.values()) totalAppData += v[0] + v[1];
         if (totalAppData == 0) totalAppData = prefs().getLong("saved_totalRx", 0) + prefs().getLong("saved_totalTx", 0);
-        long saved = DataSaverService.totalSavedBytes;
-        if (saved == 0) saved = prefs().getLong("saved_totalSaved", 0);
-        double pct = totalAppData > 0 ? (saved * 100.0 / totalAppData) : 0;
+
+        // Real savings from ad blocking + background blocking
+        long realSaved = DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get();
+        long realAds = DataSaverVpnService.blockedAdRequests.get();
+        long realBgSyncs = DataSaverVpnService.blockedBgSyncs.get();
+        double pct = totalAppData > 0 ? (realSaved * 100.0 / totalAppData) : 0;
 
         tvUsed.setText(formatBytes(totalAppData));
-        tvSaved.setText(formatBytes(saved));
+        tvSaved.setText(formatBytes(realSaved));
         tvSavedPct.setText(String.format("%.1f%%", pct));
 
         // Update summary label with context
@@ -2075,26 +2151,22 @@ public class MainActivity extends Activity {
             }
         }
 
-        // Show naira value of saved data
-        double nairaValue = bytesToNaira(saved);
+        // Show naira value of real saved data
+        double nairaValue = bytesToNaira(realSaved);
         if (tvSavedValue != null) tvSavedValue.setText("Worth " + formatNaira(nairaValue));
 
-        // Update savings card
-        TextView tvCardSaved = findViewById(R.id.tvCardDataSaved);
-        TextView tvCardMoney = findViewById(R.id.tvCardMoneySaved);
-        TextView tvCardWouldSpent = findViewById(R.id.tvCardWouldSpent);
-        if (tvCardSaved != null) {
-            tvCardSaved.setText(formatBytes(saved));
-            // With DataSaver = what you actually spent (total used, in naira)
-            double withUs = bytesToNaira(totalAppData);
-            // Without DataSaver = what you would have spent (total used + saved, in naira)
-            double withoutUs = bytesToNaira(totalAppData + saved);
-            tvCardMoney.setText(formatNaira(withUs));
-            tvCardWouldSpent.setText(formatNaira(withoutUs));
+        // Update real savings card
+        TextView tvRealAds = findViewById(R.id.tvRealAdsBlocked);
+        TextView tvRealData = findViewById(R.id.tvRealDataSaved);
+        TextView tvRealMoney = findViewById(R.id.tvRealMoneySaved);
+        if (tvRealAds != null) {
+            tvRealAds.setText(String.valueOf(realAds + realBgSyncs));
+            tvRealData.setText(formatBytes(realSaved));
+            tvRealMoney.setText(formatNaira(bytesToNaira(realSaved)));
         }
 
-        long usedBar = Math.max(totalAppData - saved, 1);
-        long savedBar = Math.max(saved, 1);
+        long usedBar = Math.max(totalAppData, 1);
+        long savedBar = Math.max(realSaved, 1);
         barUsed.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) usedBar));
         barSaved.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) savedBar));
     }
@@ -2126,13 +2198,13 @@ public class MainActivity extends Activity {
 
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.HORIZONTAL);
-            card.setBackgroundColor(0xFFFFFFFF);
-            card.setElevation(2);
-            card.setPadding(dp(12), dp(12), dp(12), dp(12));
+            card.setBackground(getResources().getDrawable(R.drawable.card_bg));
+            card.setElevation(dp(3));
+            card.setPadding(dp(14), dp(14), dp(14), dp(14));
             card.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            cp.bottomMargin = dp(8);
+            cp.bottomMargin = dp(10);
             card.setLayoutParams(cp);
 
             // App icon
@@ -2164,26 +2236,26 @@ public class MainActivity extends Activity {
 
             card.addView(textCol);
 
-            // Saved badge — show MB only, no percentage
-            if (saved > 0) {
+            // Saved badge — show MB only, no percentage (real savings only from ad blocking)
+            long realAppSaved = DataSaverVpnService.blockedAdBytes.get();
+            if (realAppSaved > 0 && count == 0) {
+                // Only show total real savings on the top app
                 LinearLayout savedCol = new LinearLayout(this);
                 savedCol.setOrientation(LinearLayout.VERTICAL);
                 savedCol.setGravity(Gravity.END);
                 TextView tvS = new TextView(this);
-                tvS.setText("Saved " + formatBytes(saved));
+                tvS.setText(formatBytes(total));
                 tvS.setTextSize(12);
-                tvS.setTextColor(0xFF43A047);
-                tvS.setTypeface(null, Typeface.BOLD);
+                tvS.setTextColor(0xFF888888);
                 savedCol.addView(tvS);
-                double val = bytesToNaira(saved);
-                if (val >= 1) {
-                    TextView tvV = new TextView(this);
-                    tvV.setText(formatNaira(val));
-                    tvV.setTextSize(11);
-                    tvV.setTextColor(0xFF1B5E20);
-                    savedCol.addView(tvV);
-                }
                 card.addView(savedCol);
+            } else {
+                // Show usage amount
+                TextView tvAmt = new TextView(this);
+                tvAmt.setText(formatBytes(total));
+                tvAmt.setTextSize(12);
+                tvAmt.setTextColor(0xFF888888);
+                card.addView(tvAmt);
             }
 
             final String appNameFinal = entry.getKey();
