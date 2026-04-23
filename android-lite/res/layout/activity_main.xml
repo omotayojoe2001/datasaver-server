@@ -470,6 +470,35 @@
                     android:layout_marginTop="2dp" />
             </LinearLayout>
 
+            <!-- Protected Apps shortcut -->
+            <LinearLayout
+                android:id="@+id/btnProtectedApps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:background="@drawable/card_bg"
+                android:padding="14dp"
+                android:layout_marginLeft="12dp"
+                android:layout_marginRight="12dp"
+                android:layout_marginBottom="8dp"
+                android:elevation="3dp"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Protected Apps"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#1565C0" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Choose apps that should never be interrupted >"
+                    android:textSize="11sp"
+                    android:textColor="#888888" />
+            </LinearLayout>
+
             <!-- App Data Usage Header -->
             <LinearLayout
                 android:layout_width="match_parent"
@@ -933,7 +962,7 @@
                 android:layout_weight="1"
                 android:gravity="center"
                 android:text="Data Usage"
-                android:textSize="14sp"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
                 android:background="#1565C0" />
@@ -944,7 +973,18 @@
                 android:layout_weight="1"
                 android:gravity="center"
                 android:text="Transactions"
-                android:textSize="14sp"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#666666"
+                android:background="#00000000" />
+            <TextView
+                android:id="@+id/histTabSavings"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Savings"
+                android:textSize="13sp"
                 android:textStyle="bold"
                 android:textColor="#666666"
                 android:background="#00000000" />
@@ -989,6 +1029,61 @@
             android:padding="16dp"
             android:visibility="gone">
 
+            <!-- Transaction date filters -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="12dp">
+                <TextView
+                    android:id="@+id/txnFilterAll"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="All"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="@drawable/pill_active"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/txnFilterToday"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Today"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#666666"
+                    android:background="@drawable/pill_bg"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/txnFilterWeek"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="This Week"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#666666"
+                    android:background="@drawable/pill_bg"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/txnFilterMonth"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="This Month"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#666666"
+                    android:background="@drawable/pill_bg" />
+            </LinearLayout>
+
             <LinearLayout
                 android:id="@+id/txnHistoryContainer"
                 android:layout_width="match_parent"
@@ -1001,6 +1096,158 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="No transactions yet"
+                android:textSize="13sp"
+                android:textColor="#999999"
+                android:gravity="center"
+                android:padding="16dp" />
+        </LinearLayout>
+
+        <!-- Savings Section -->
+        <LinearLayout
+            android:id="@+id/histSavingsSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <!-- Period totals -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:background="@drawable/card_green"
+                    android:padding="12dp"
+                    android:layout_marginRight="6dp">
+                    <TextView
+                        android:id="@+id/tvSavingsToday"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Today"
+                        android:textSize="11sp"
+                        android:textColor="#555555" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:background="@drawable/card_green"
+                    android:padding="12dp"
+                    android:layout_marginRight="6dp">
+                    <TextView
+                        android:id="@+id/tvSavingsWeek"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="This Week"
+                        android:textSize="11sp"
+                        android:textColor="#555555" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:background="@drawable/card_green"
+                    android:padding="12dp">
+                    <TextView
+                        android:id="@+id/tvSavingsMonth"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="This Month"
+                        android:textSize="11sp"
+                        android:textColor="#555555" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- All time -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_bg"
+                android:padding="16dp"
+                android:elevation="3dp"
+                android:layout_marginBottom="16dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="All Time"
+                    android:textSize="13sp"
+                    android:textColor="#999999" />
+                <TextView
+                    android:id="@+id/tvSavingsAllTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0 B"
+                    android:textSize="28sp"
+                    android:textStyle="bold"
+                    android:textColor="#1B5E20"
+                    android:layout_marginTop="4dp" />
+                <TextView
+                    android:id="@+id/tvSavingsAllTimeBlocked"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0 requests blocked"
+                    android:textSize="12sp"
+                    android:textColor="#43A047"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Daily history list -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Daily Breakdown"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#333333"
+                android:layout_marginBottom="8dp" />
+
+            <LinearLayout
+                android:id="@+id/savingsHistoryContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/tvNoSavings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="No savings data yet. Turn on DataSaver to start saving."
                 android:textSize="13sp"
                 android:textColor="#999999"
                 android:gravity="center"

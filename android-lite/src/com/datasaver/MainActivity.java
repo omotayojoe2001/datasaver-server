@@ -186,6 +186,11 @@ public class MainActivity extends Activity {
         btnAirtel.setOnClickListener(v -> selectNetwork("AIRTEL"));
         btnGlo.setOnClickListener(v -> selectNetwork("GLO"));
         btn9mobile.setOnClickListener(v -> selectNetwork("9MOBILE"));
+        // Set network logos (scaled to fit)
+        setScaledLogo(btnMTN, R.drawable.logo_mtn, "MTN");
+        setScaledLogo(btnAirtel, R.drawable.logo_airtel, "Airtel");
+        setScaledLogo(btnGlo, R.drawable.logo_glo, "Glo");
+        setScaledLogo(btn9mobile, R.drawable.logo_9mobile, "9mobile");
 
         toggleAirtime.setOnClickListener(v -> setMode(false));
         toggleData.setOnClickListener(v -> setMode(true));
@@ -215,6 +220,9 @@ public class MainActivity extends Activity {
             updateAppCards();
         });
 
+        // Protected Apps
+        findViewById(R.id.btnProtectedApps).setOnClickListener(v -> showProtectedAppsPage());
+
         // Time filters
         TextView filterToday = findViewById(R.id.filterToday);
         TextView filterWeek = findViewById(R.id.filterWeek);
@@ -224,7 +232,9 @@ public class MainActivity extends Activity {
         filterMonth.setOnClickListener(v -> applyFilter("month", filterToday, filterWeek, filterMonth));
 
         restoreSavedStats();
-        // Restore real VPN savings from SharedPreferences immediately
+        // Load real savings from server (survives restarts)
+        loadSavingsFromServer();
+        // Restore VPN savings from SharedPreferences as fallback
         long savedAdBytes = prefs().getLong("real_ad_bytes", 0);
         long savedBgBytes = prefs().getLong("real_bg_bytes", 0);
         long savedAdReqs = prefs().getLong("real_ad_requests", 0);
@@ -251,26 +261,88 @@ public class MainActivity extends Activity {
         TextView tvTip = findViewById(R.id.tvTip);
         TextView btnNextTip = findViewById(R.id.btnNextTip);
         if (tvTip == null || btnNextTip == null) return;
-        tvTip.setText(DATA_TIPS[currentTipIndex]);
+        updateTipStyle(tvTip);
         btnNextTip.setOnClickListener(v -> {
             currentTipIndex = (currentTipIndex + 1) % DATA_TIPS.length;
-            tvTip.setText(DATA_TIPS[currentTipIndex]);
+            updateTipStyle(tvTip);
         });
         // Auto-rotate every 8 seconds
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
                 currentTipIndex = (currentTipIndex + 1) % DATA_TIPS.length;
-                tvTip.setText(DATA_TIPS[currentTipIndex]);
+                updateTipStyle(tvTip);
                 handler.postDelayed(this, 8000);
             }
         }, 8000);
+    }
+
+    private void updateTipStyle(TextView tvTip) {
+        tvTip.setText(DATA_TIPS[currentTipIndex]);
+        // Alternate: even = white bg/dark text, odd = dark bg/white text
+        LinearLayout tipContainer = (LinearLayout) tvTip.getParent();
+        if (tipContainer != null) {
+            if (currentTipIndex % 2 == 0) {
+                tipContainer.setBackground(getResources().getDrawable(R.drawable.card_bg));
+                tvTip.setTextColor(0xFF444444);
+            } else {
+                tipContainer.setBackgroundColor(0xFF1A237E);
+                tvTip.setTextColor(0xFFE8EAF6);
+            }
+        }
     }
 
     // ==================== SAVINGS CARD ====================
 
     private void initSavingsCard() {
         // Updated in updateSummary()
+    }
+
+    /** Load savings from server database - survives phone restarts */
+    private void loadSavingsFromServer() {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                URL url = new URL(SERVER_URL + "/api/savings/" + phone);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                long serverTotal = res.optLong("total_saved", 0);
+                long serverBlocked = res.optLong("total_blocked", 0);
+                // Use server values if they're higher than local
+                if (serverTotal > DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get()) {
+                    // Split between ad and bg (rough estimate)
+                    DataSaverVpnService.blockedAdBytes.set(serverTotal / 2);
+                    DataSaverVpnService.blockedBgBytes.set(serverTotal - serverTotal / 2);
+                    DataSaverVpnService.blockedAdRequests.set(serverBlocked / 2);
+                    DataSaverVpnService.blockedBgSyncs.set(serverBlocked - serverBlocked / 2);
+                    // Also save to SharedPreferences
+                    prefs().edit()
+                        .putLong("real_ad_bytes", DataSaverVpnService.blockedAdBytes.get())
+                        .putLong("real_bg_bytes", DataSaverVpnService.blockedBgBytes.get())
+                        .putLong("real_ad_requests", DataSaverVpnService.blockedAdRequests.get())
+                        .putLong("real_bg_syncs", DataSaverVpnService.blockedBgSyncs.get())
+                        .apply();
+                }
+                // Store period breakdowns
+                JSONObject today = res.optJSONObject("today");
+                JSONObject week = res.optJSONObject("week");
+                JSONObject month = res.optJSONObject("month");
+                if (today != null) prefs().edit().putLong("savings_today", today.optLong("saved", 0)).apply();
+                if (week != null) prefs().edit().putLong("savings_week", week.optLong("saved", 0)).apply();
+                if (month != null) prefs().edit().putLong("savings_month", month.optLong("saved", 0)).apply();
+                handler.post(() -> updateSummary());
+            } catch (Exception e) {
+                // Server unavailable, use local data
+            }
+        }).start();
     }
 
     // ==================== FINGERPRINT LOGIN ====================
@@ -539,16 +611,16 @@ public class MainActivity extends Activity {
     private void switchAuthTab(boolean signup, TextView tabLogin, TextView tabSignup) {
         isSignupMode = signup;
         if (signup) {
-            tabSignup.setBackgroundColor(0xFF1565C0);
+            tabSignup.setBackground(getResources().getDrawable(R.drawable.pill_active));
             tabSignup.setTextColor(0xFFFFFFFF);
-            tabLogin.setBackgroundColor(0x00000000);
+            tabLogin.setBackground(getResources().getDrawable(R.drawable.pill_bg));
             tabLogin.setTextColor(0xFF666666);
             loginForm.setVisibility(View.GONE);
             signupForm.setVisibility(View.VISIBLE);
         } else {
-            tabLogin.setBackgroundColor(0xFF1565C0);
+            tabLogin.setBackground(getResources().getDrawable(R.drawable.pill_active));
             tabLogin.setTextColor(0xFFFFFFFF);
-            tabSignup.setBackgroundColor(0x00000000);
+            tabSignup.setBackground(getResources().getDrawable(R.drawable.pill_bg));
             tabSignup.setTextColor(0xFF666666);
             loginForm.setVisibility(View.VISIBLE);
             signupForm.setVisibility(View.GONE);
@@ -645,34 +717,53 @@ public class MainActivity extends Activity {
 
     private void selectNetwork(String network) {
         selectedNetwork = network;
-        btnMTN.setAlpha(0.4f);
-        btnAirtel.setAlpha(0.4f);
-        btnGlo.setAlpha(0.4f);
-        btn9mobile.setAlpha(0.4f);
-        if ("MTN".equals(network)) btnMTN.setAlpha(1.0f);
-        else if ("AIRTEL".equals(network)) btnAirtel.setAlpha(1.0f);
-        else if ("GLO".equals(network)) btnGlo.setAlpha(1.0f);
-        else if ("9MOBILE".equals(network)) btn9mobile.setAlpha(1.0f);
-
+        btnMTN.setAlpha(0.3f);
+        btnAirtel.setAlpha(0.3f);
+        btnGlo.setAlpha(0.3f);
+        btn9mobile.setAlpha(0.3f);
+        // Highlight selected with full opacity and blue border
+        TextView selected = null;
+        if ("MTN".equals(network)) selected = btnMTN;
+        else if ("AIRTEL".equals(network)) selected = btnAirtel;
+        else if ("GLO".equals(network)) selected = btnGlo;
+        else if ("9MOBILE".equals(network)) selected = btn9mobile;
+        if (selected != null) {
+            selected.setAlpha(1.0f);
+            selected.setBackgroundColor(0xFFE3F2FD);
+        }
         if (isDataMode) fetchAndLoadPlans();
+    }
+
+    private void setScaledLogo(TextView btn, int drawableRes, String label) {
+        try {
+            Drawable d = getResources().getDrawable(drawableRes);
+            int size = dp(36);
+            d.setBounds(0, 0, size, size);
+            btn.setCompoundDrawables(null, d, null, null);
+            btn.setText(label);
+            btn.setTextSize(10);
+            btn.setBackgroundColor(0x00000000);
+        } catch (Exception e) {
+            btn.setText(label);
+        }
     }
 
     private void setMode(boolean dataMode) {
         isDataMode = dataMode;
         selectedDataPlanIndex = -1;
         if (dataMode) {
-            toggleData.setBackgroundColor(0xFF1565C0);
+            toggleData.setBackground(getResources().getDrawable(R.drawable.pill_active));
             toggleData.setTextColor(0xFFFFFFFF);
-            toggleAirtime.setBackgroundColor(0x00000000);
+            toggleAirtime.setBackground(getResources().getDrawable(R.drawable.pill_bg));
             toggleAirtime.setTextColor(0xFF666666);
             airtimeSection.setVisibility(View.GONE);
             dataSection.setVisibility(View.VISIBLE);
             btnBuy.setText("BUY DATA");
             if (selectedNetwork != null) fetchAndLoadPlans();
         } else {
-            toggleAirtime.setBackgroundColor(0xFF1565C0);
+            toggleAirtime.setBackground(getResources().getDrawable(R.drawable.pill_active));
             toggleAirtime.setTextColor(0xFFFFFFFF);
-            toggleData.setBackgroundColor(0x00000000);
+            toggleData.setBackground(getResources().getDrawable(R.drawable.pill_bg));
             toggleData.setTextColor(0xFF666666);
             airtimeSection.setVisibility(View.VISIBLE);
             dataSection.setVisibility(View.GONE);
@@ -746,10 +837,10 @@ public class MainActivity extends Activity {
             tab.setPadding(dp(14), dp(8), dp(14), dp(8));
             tab.setTypeface(null, Typeface.BOLD);
             if (cat.equals(selectedPlanCategory)) {
-                tab.setBackgroundColor(0xFF1565C0);
+                tab.setBackground(getResources().getDrawable(R.drawable.pill_active));
                 tab.setTextColor(0xFFFFFFFF);
             } else {
-                tab.setBackgroundColor(0xFFE0E0E0);
+                tab.setBackground(getResources().getDrawable(R.drawable.pill_bg));
                 tab.setTextColor(0xFF666666);
             }
             LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
@@ -1188,10 +1279,10 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private LinearLayout usageHistoryContainer, txnHistoryContainer;
-    private TextView tvNoTxn, tvHistorySaved, tvHistorySavedPct;
-    private TextView histTabUsage, histTabTxn;
-    private LinearLayout histUsageSection, histTxnSection;
+    private LinearLayout usageHistoryContainer, txnHistoryContainer, savingsHistoryContainer;
+    private LinearLayout histUsageSection, histTxnSection, histSavingsSection;
+    private TextView tvNoTxn, tvHistorySaved, tvHistorySavedPct, tvNoSavings;
+    private TextView histTabUsage, histTabTxn, histTabSavings;
     private boolean showAllUsage = false;
 
     private void initHistoryTab() {
@@ -1202,11 +1293,16 @@ public class MainActivity extends Activity {
         tvHistorySavedPct = findViewById(R.id.tvHistorySavedPct);
         histTabUsage = findViewById(R.id.histTabUsage);
         histTabTxn = findViewById(R.id.histTabTxn);
+        histTabSavings = findViewById(R.id.histTabSavings);
         histUsageSection = findViewById(R.id.histUsageSection);
         histTxnSection = findViewById(R.id.histTxnSection);
+        histSavingsSection = findViewById(R.id.histSavingsSection);
+        savingsHistoryContainer = findViewById(R.id.savingsHistoryContainer);
+        tvNoSavings = findViewById(R.id.tvNoSavings);
 
-        histTabUsage.setOnClickListener(v -> switchHistoryTab(true));
-        histTabTxn.setOnClickListener(v -> switchHistoryTab(false));
+        histTabUsage.setOnClickListener(v -> switchHistoryTab(0));
+        histTabTxn.setOnClickListener(v -> switchHistoryTab(1));
+        histTabSavings.setOnClickListener(v -> switchHistoryTab(2));
 
         findViewById(R.id.btnSeeAllUsage).setOnClickListener(v -> {
             showAllUsage = !showAllUsage;
@@ -1218,25 +1314,135 @@ public class MainActivity extends Activity {
             fetchTransactions();
             Toast.makeText(this, "Refreshing...", Toast.LENGTH_SHORT).show();
         });
+
+        // Transaction date filters
+        TextView txnAll = findViewById(R.id.txnFilterAll);
+        TextView txnToday = findViewById(R.id.txnFilterToday);
+        TextView txnWeek = findViewById(R.id.txnFilterWeek);
+        TextView txnMonth = findViewById(R.id.txnFilterMonth);
+        if (txnAll != null) {
+            txnAll.setOnClickListener(v -> applyTxnFilter("all", txnAll, txnToday, txnWeek, txnMonth));
+            txnToday.setOnClickListener(v -> applyTxnFilter("today", txnAll, txnToday, txnWeek, txnMonth));
+            txnWeek.setOnClickListener(v -> applyTxnFilter("week", txnAll, txnToday, txnWeek, txnMonth));
+            txnMonth.setOnClickListener(v -> applyTxnFilter("month", txnAll, txnToday, txnWeek, txnMonth));
+        }
     }
 
-    private void switchHistoryTab(boolean usageTab) {
-        if (usageTab) {
-            histTabUsage.setBackgroundColor(0xFF1565C0);
-            histTabUsage.setTextColor(0xFFFFFFFF);
-            histTabTxn.setBackgroundColor(0x00000000);
-            histTabTxn.setTextColor(0xFF666666);
-            histUsageSection.setVisibility(View.VISIBLE);
-            histTxnSection.setVisibility(View.GONE);
-        } else {
-            histTabTxn.setBackgroundColor(0xFF1565C0);
-            histTabTxn.setTextColor(0xFFFFFFFF);
-            histTabUsage.setBackgroundColor(0x00000000);
-            histTabUsage.setTextColor(0xFF666666);
-            histUsageSection.setVisibility(View.GONE);
-            histTxnSection.setVisibility(View.VISIBLE);
-            fetchAllTransactions();
+    private void switchHistoryTab(int tab) {
+        // Style all three tabs
+        histTabUsage.setBackground(getResources().getDrawable(tab == 0 ? R.drawable.pill_active : R.drawable.pill_bg));
+        histTabUsage.setTextColor(tab == 0 ? 0xFFFFFFFF : 0xFF666666);
+        histTabTxn.setBackground(getResources().getDrawable(tab == 1 ? R.drawable.pill_active : R.drawable.pill_bg));
+        histTabTxn.setTextColor(tab == 1 ? 0xFFFFFFFF : 0xFF666666);
+        if (histTabSavings != null) {
+            histTabSavings.setBackground(getResources().getDrawable(tab == 2 ? R.drawable.pill_active : R.drawable.pill_bg));
+            histTabSavings.setTextColor(tab == 2 ? 0xFFFFFFFF : 0xFF666666);
         }
+        // Show/hide all three sections
+        histUsageSection.setVisibility(tab == 0 ? View.VISIBLE : View.GONE);
+        histTxnSection.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
+        if (histSavingsSection != null) histSavingsSection.setVisibility(tab == 2 ? View.VISIBLE : View.GONE);
+        // Load data for selected tab
+        if (tab == 1) fetchAllTransactions();
+        if (tab == 2) loadSavingsHistory();
+    }
+
+    private void loadSavingsHistory() {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) { tvNoSavings.setText("Login to see savings"); tvNoSavings.setVisibility(View.VISIBLE); return; }
+ tvNoSavings.setText("Loading..."); tvNoSavings.setVisibility(View.VISIBLE);
+ savingsHistoryContainer.removeAllViews();
+ new Thread(() -> {
+ try {
+ URL url = new URL(SERVER_URL + "/api/savings/" + phone);
+ HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+ conn.setConnectTimeout(15000); conn.setReadTimeout(15000);
+ BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+ StringBuilder sb = new StringBuilder(); String line;
+ while ((line = reader.readLine()) != null) sb.append(line);
+ reader.close();
+ JSONObject res = new JSONObject(sb.toString());
+ long totalSaved = res.optLong("total_saved", 0);
+ long totalBlocked = res.optLong("total_blocked", 0);
+ JSONObject todayObj = res.optJSONObject("today");
+ JSONObject weekObj = res.optJSONObject("week");
+ JSONObject monthObj = res.optJSONObject("month");
+ JSONArray history = res.optJSONArray("history");
+ handler.post(() -> {
+ TextView tvToday = findViewById(R.id.tvSavingsToday);
+ TextView tvWeek = findViewById(R.id.tvSavingsWeek);
+ TextView tvMonth = findViewById(R.id.tvSavingsMonth);
+ TextView tvAll = findViewById(R.id.tvSavingsAllTime);
+ TextView tvAllB = findViewById(R.id.tvSavingsAllTimeBlocked);
+ if (tvToday != null && todayObj != null) tvToday.setText(formatBytes(todayObj.optLong("saved", 0)));
+ if (tvWeek != null && weekObj != null) tvWeek.setText(formatBytes(weekObj.optLong("saved", 0)));
+ if (tvMonth != null && monthObj != null) tvMonth.setText(formatBytes(monthObj.optLong("saved", 0)));
+ if (tvAll != null) tvAll.setText(formatBytes(totalSaved));
+ if (tvAllB != null) tvAllB.setText(totalBlocked + " requests blocked");
+ savingsHistoryContainer.removeAllViews();
+ if (history != null && history.length() > 0) {
+ tvNoSavings.setVisibility(View.GONE);
+ for (int i = 0; i < history.length() && i < 14; i++) {
+ try {
+ JSONObject day = history.getJSONObject(i);
+ String date = day.optString("date", "");
+                                long saved = day.optLong("saved_bytes", 0);
+ long blocked = day.optLong("blocked_requests", 0);
+ if (saved == 0 && blocked == 0) continue;
+ LinearLayout row = new LinearLayout(MainActivity.this);
+ row.setOrientation(LinearLayout.HORIZONTAL);
+ row.setBackground(getResources().getDrawable(R.drawable.card_bg));
+ row.setPadding(dp(14), dp(12), dp(14), dp(12));
+ row.setElevation(dp(2)); row.setGravity(Gravity.CENTER_VERTICAL);
+ LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+ rlp.bottomMargin = dp(8); row.setLayoutParams(rlp);
+ TextView tvDate = new TextView(MainActivity.this);
+ tvDate.setText(date); tvDate.setTextSize(13); tvDate.setTextColor(0xFF333333); tvDate.setTypeface(null, Typeface.BOLD);
+ tvDate.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+ row.addView(tvDate);
+ LinearLayout rc = new LinearLayout(MainActivity.this); rc.setOrientation(LinearLayout.VERTICAL); rc.setGravity(Gravity.END);
+ TextView tvS = new TextView(MainActivity.this); tvS.setText(formatBytes(saved)); tvS.setTextSize(14); tvS.setTextColor(0xFF43A047); tvS.setTypeface(null, Typeface.BOLD); rc.addView(tvS);
+ TextView tvB = new TextView(MainActivity.this); tvB.setText(blocked + " blocked"); tvB.setTextSize(11); tvB.setTextColor(0xFF888888); rc.addView(tvB);
+ row.addView(rc); savingsHistoryContainer.addView(row);
+ } catch (Exception e) {}
+ }
+ } else { tvNoSavings.setText("No savings data yet"); tvNoSavings.setVisibility(View.VISIBLE); }
+ });
+ } catch (Exception e) {
+                // Fallback to local data
+                handler.post(() -> {
+                    long localSaved = DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get();
+                    long localBlocked = DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get();
+                    TextView tvToday = findViewById(R.id.tvSavingsToday);
+                    TextView tvWeek = findViewById(R.id.tvSavingsWeek);
+                    TextView tvMonth = findViewById(R.id.tvSavingsMonth);
+                    TextView tvAll = findViewById(R.id.tvSavingsAllTime);
+                    TextView tvAllB = findViewById(R.id.tvSavingsAllTimeBlocked);
+                    if (tvToday != null) tvToday.setText(formatBytes(localSaved));
+                    if (tvWeek != null) tvWeek.setText(formatBytes(localSaved));
+                    if (tvMonth != null) tvMonth.setText(formatBytes(localSaved));
+                    if (tvAll != null) tvAll.setText(formatBytes(localSaved));
+                    if (tvAllB != null) tvAllB.setText(localBlocked + " requests blocked");
+                    if (localSaved > 0) tvNoSavings.setVisibility(View.GONE);
+                    else { tvNoSavings.setText("Turn on DataSaver to start saving"); tvNoSavings.setVisibility(View.VISIBLE); }
+                });
+            }
+ }).start();
+ }
+
+ private String txnFilter = "all";
+
+    private void applyTxnFilter(String filter, TextView all, TextView today, TextView week, TextView month) {
+        txnFilter = filter;
+        all.setBackground(getResources().getDrawable("all".equals(filter) ? R.drawable.pill_active : R.drawable.pill_bg));
+        all.setTextColor("all".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
+        today.setBackground(getResources().getDrawable("today".equals(filter) ? R.drawable.pill_active : R.drawable.pill_bg));
+        today.setTextColor("today".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
+        week.setBackground(getResources().getDrawable("week".equals(filter) ? R.drawable.pill_active : R.drawable.pill_bg));
+        week.setTextColor("week".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
+        month.setBackground(getResources().getDrawable("month".equals(filter) ? R.drawable.pill_active : R.drawable.pill_bg));
+        month.setTextColor("month".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
+        fetchAllTransactions();
     }
 
     private void fetchAllTransactions() {
@@ -1281,13 +1487,32 @@ public class MainActivity extends Activity {
 
     private void showAllTransactions(JSONArray arr) {
         txnHistoryContainer.removeAllViews();
-        if (arr.length() == 0) { tvNoTxn.setText("No transactions yet"); tvNoTxn.setVisibility(View.VISIBLE); return; }
+        if (arr.length() == 0) {
+            String msg = "all".equals(txnFilter) ? "No transactions yet" : "No transactions for this period";
+            tvNoTxn.setText(msg); tvNoTxn.setVisibility(View.VISIBLE); return;
+        }
         tvNoTxn.setVisibility(View.GONE);
 
         // Sort by created_at descending
         ArrayList<JSONObject> list = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) try { list.add(arr.getJSONObject(i)); } catch (Exception e) {}
         Collections.sort(list, (a, b) -> b.optString("created_at", "").compareTo(a.optString("created_at", "")));
+        // Apply date filter
+        if (!"all".equals(txnFilter)) {
+            long now = System.currentTimeMillis();
+            long cutoff = now;
+            if ("today".equals(txnFilter)) cutoff = now - 24L * 60 * 60 * 1000;
+            else if ("week".equals(txnFilter)) cutoff = now - 7L * 24 * 60 * 60 * 1000;
+            else if ("month".equals(txnFilter)) cutoff = now - 30L * 24 * 60 * 60 * 1000;
+            String cutoffStr = new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date(cutoff));
+            ArrayList<JSONObject> filtered = new ArrayList<>();
+            for (JSONObject t : list) { if (t.optString("created_at", "").compareTo(cutoffStr) >= 0) filtered.add(t); }
+            list = filtered;
+        }
+        if (list.isEmpty()) {
+            tvNoTxn.setText("No transactions for this period");
+            tvNoTxn.setVisibility(View.VISIBLE); return;
+        }
 
         for (JSONObject txn : list) {
             boolean isWallet = txn.optBoolean("_wallet", false);
@@ -1370,8 +1595,9 @@ public class MainActivity extends Activity {
             addUsageCard(e.getKey(), formatBytes(total), total, saved);
         }
 
-        tvHistorySaved.setText(formatBytes(DataSaverService.totalSavedBytes));
-        double pct = totalUsed > 0 ? (DataSaverService.totalSavedBytes * 100.0 / totalUsed) : 0;
+        tvHistorySaved.setText(formatBytes(DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get()));
+        long realSaved = DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get();
+        double pct = totalUsed > 0 ? Math.min((realSaved * 100.0 / totalUsed), 99.9) : 0;
         tvHistorySavedPct.setText(String.format("You saved %.1f%% of your data", pct));
     }
 
@@ -1417,12 +1643,7 @@ public class MainActivity extends Activity {
         card.addView(textCol);
 
         if (saved > 0) {
-            TextView sv = new TextView(this);
-            sv.setText("Saved " + formatBytes(saved));
-            sv.setTextSize(12);
-            sv.setTextColor(0xFF43A047);
-            sv.setTypeface(null, Typeface.BOLD);
-            card.addView(sv);
+            // Only show real savings, not simulated
         }
 
         usageHistoryContainer.addView(card);
@@ -1564,50 +1785,113 @@ public class MainActivity extends Activity {
     }
 
     private void showBypassAppsDialog() {
-        // Get current bypass list
+        showProtectedAppsPage();
+    }
+
+    private void showProtectedAppsPage() {
+        // Get current protected apps
         String current = prefs().getString("bypass_apps", "");
-        Set<String> bypassed = new java.util.HashSet<>();
+        Set<String> protectedPkgs = new java.util.HashSet<>();
         if (!current.isEmpty()) {
-            for (String pkg : current.split(",")) bypassed.add(pkg.trim());
+            for (String pkg : current.split(",")) protectedPkgs.add(pkg.trim());
         }
+        // Default protected apps
+        String[] defaults = {"com.whatsapp", "com.whatsapp.w4b", "com.android.chrome",
+            "com.gtbank.gtworldapp", "com.accessbank.accessbankapp", "com.zenithbank.eazymoney",
+            "com.firstbanknigeria.firstmobile", "ng.opay", "com.palmpay.app", "com.kuda.app",
+            "org.telegram.messenger", "com.Slack"};
+        for (String d : defaults) protectedPkgs.add(d);
 
-        // Common apps that might need bypassing
-        String[][] apps = {
-            {"Banking Apps", "com.gtbank.gtworldapp,com.accessbank.accessbankapp,com.zenithbank.eazymoney,com.firstbanknigeria.firstmobile,ng.opay,com.palmpay.app"},
-            {"WhatsApp", "com.whatsapp"},
-            {"WhatsApp Business", "com.whatsapp.w4b"},
-            {"Google Play Store", "com.android.vending"},
-            {"Chrome", "com.android.chrome"},
-            {"YouTube", "com.google.android.youtube"},
-            {"Netflix", "com.netflix.mediaclient"},
-            {"Spotify", "com.spotify.music"},
-        };
-
-        String[] names = new String[apps.length];
-        boolean[] checked = new boolean[apps.length];
-        for (int i = 0; i < apps.length; i++) {
-            names[i] = apps[i][0];
-            for (String pkg : apps[i][1].split(",")) {
-                if (bypassed.contains(pkg.trim())) { checked[i] = true; break; }
+        // Build full app list in background
+        Toast.makeText(this, "Loading apps...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            PackageManager pm = getPackageManager();
+            ArrayList<String[]> appList = new ArrayList<>();
+            for (ApplicationInfo ai : pm.getInstalledApplications(PackageManager.GET_META_DATA)) {
+                // Skip system apps without a launcher icon
+                if (ai.icon == 0) continue;
+                String label = pm.getApplicationLabel(ai).toString();
+                String pkg = ai.packageName;
+                if (pkg.equals(getPackageName())) continue;
+                appList.add(new String[]{label, pkg});
             }
-        }
+            Collections.sort(appList, (a, b) -> a[0].compareToIgnoreCase(b[0]));
 
-        new AlertDialog.Builder(this)
-            .setTitle("VPN Bypass List")
-            .setMultiChoiceItems(names, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
-            .setPositiveButton("Save", (d, w) -> {
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < apps.length; i++) {
-                    if (checked[i]) {
-                        if (sb.length() > 0) sb.append(",");
-                        sb.append(apps[i][1]);
+            handler.post(() -> {
+                // Build dialog with scrollable list
+                ScrollView scroll = new ScrollView(this);
+                LinearLayout container = new LinearLayout(this);
+                container.setOrientation(LinearLayout.VERTICAL);
+                container.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+                // Info text
+                TextView info = new TextView(this);
+                info.setText("Apps you protect will never be interrupted by DataSaver. Banking apps and messaging apps are protected by default.");
+                info.setTextSize(13);
+                info.setTextColor(0xFF666666);
+                info.setPadding(0, 0, 0, dp(12));
+                container.addView(info);
+
+                // Track checkboxes
+                ArrayList<android.widget.CheckBox> checkboxes = new ArrayList<>();
+                ArrayList<String> packages = new ArrayList<>();
+
+                for (String[] app : appList) {
+                    LinearLayout row = new LinearLayout(this);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    row.setPadding(0, dp(6), 0, dp(6));
+
+                    // App icon
+                    android.widget.ImageView icon = new android.widget.ImageView(this);
+                    try {
+                        icon.setImageDrawable(pm.getApplicationIcon(app[1]));
+                    } catch (Exception e) {
+                        icon.setImageDrawable(makeLetterIcon(app[0]));
                     }
+                    LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(32), dp(32));
+                    iconLp.rightMargin = dp(10);
+                    icon.setLayoutParams(iconLp);
+                    row.addView(icon);
+
+                    // App name
+                    TextView name = new TextView(this);
+                    name.setText(app[0]);
+                    name.setTextSize(14);
+                    name.setTextColor(0xFF333333);
+                    name.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+                    row.addView(name);
+
+                    // Toggle
+                    android.widget.CheckBox cb = new android.widget.CheckBox(this);
+                    cb.setChecked(protectedPkgs.contains(app[1]));
+                    row.addView(cb);
+
+                    checkboxes.add(cb);
+                    packages.add(app[1]);
+                    container.addView(row);
                 }
-                prefs().edit().putString("bypass_apps", sb.toString()).apply();
-                Toast.makeText(this, "Bypass list saved. Restart DataSaver to apply.", Toast.LENGTH_LONG).show();
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
+
+                scroll.addView(container);
+
+                new AlertDialog.Builder(this)
+                    .setTitle("Protected Apps")
+                    .setView(scroll)
+                    .setPositiveButton("Save", (d, w) -> {
+                        StringBuilder sb = new StringBuilder();
+                        for (int i = 0; i < checkboxes.size(); i++) {
+                            if (checkboxes.get(i).isChecked()) {
+                                if (sb.length() > 0) sb.append(",");
+                                sb.append(packages.get(i));
+                            }
+                        }
+                        prefs().edit().putString("bypass_apps", sb.toString()).apply();
+                        Toast.makeText(this, "Saved! Restart DataSaver to apply changes.", Toast.LENGTH_LONG).show();
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            });
+        }).start();
     }
 
     private String safeGet(String key) {
@@ -1907,26 +2191,25 @@ public class MainActivity extends Activity {
         container.removeAllViews();
         String[][] plans = {
             {"basic", "Basic", "FREE", "",
-             "Data compression (10% savings)",
-             "Text/HTML gzip compression",
-             "Basic data monitoring",
-             "App usage tracking"},
+             "Block common ads (saves data)",
+             "See which apps use your data",
+             "Data usage tracking"},
             {"premium", "Premium", "\u20a6500", "/week",
              "Everything in Basic",
-             "Advanced compression (up to 30% savings)",
-             "Video compression",
-             "Per-app data optimization",
-             "Detailed analytics dashboard",
-             "Priority server access"},
+             "Block all ads and trackers",
+             "Stop background apps from wasting data",
+             "Detailed app-by-app analytics",
+             "Priority faster connection"},
             {"professional", "Professional", "\u20a61,500", "/month",
              "Everything in Premium",
-             "Maximum compression (up to 40% savings)",
-             "Unlimited compression bandwidth",
-             "Multi-device support (up to 3)"},
+             "Maximum data protection",
+             "Block all background data usage",
+             "Full savings history and charts",
+             "Use on up to 3 devices"},
             {"enterprise", "Enterprise", "\u20a65,000", "/month",
              "Everything in Professional",
-             "Maximum compression (up to 40% savings)",
-             "Multi-device support (up to 5)",
+             "Strongest data saving mode",
+             "Use on up to 5 devices",
              "24/7 priority support"}
         };
 
@@ -2201,11 +2484,11 @@ public class MainActivity extends Activity {
 
     private void applyFilter(String filter, TextView today, TextView week, TextView month) {
         usageFilter = filter;
-        today.setBackgroundColor("today".equals(filter) ? 0xFF1565C0 : 0xFFE0E0E0);
+        today.setBackground(getResources().getDrawable("today".equals(filter) ? R.drawable.pill_active : R.drawable.pill_bg));
         today.setTextColor("today".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
-        week.setBackgroundColor("week".equals(filter) ? 0xFF1565C0 : 0xFFE0E0E0);
+        week.setBackground(getResources().getDrawable("week".equals(filter) ? R.drawable.pill_active : R.drawable.pill_bg));
         week.setTextColor("week".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
-        month.setBackgroundColor("month".equals(filter) ? 0xFF1565C0 : 0xFFE0E0E0);
+        month.setBackground(getResources().getDrawable("month".equals(filter) ? R.drawable.pill_active : R.drawable.pill_bg));
         month.setTextColor("month".equals(filter) ? 0xFFFFFFFF : 0xFF666666);
         loadAppUsageBackground();
     }
@@ -2231,11 +2514,20 @@ public class MainActivity extends Activity {
         for (long[] v : DataSaverService.appDataUsage.values()) totalAppData += v[0] + v[1];
         if (totalAppData == 0) totalAppData = prefs().getLong("saved_totalRx", 0) + prefs().getLong("saved_totalTx", 0);
 
-        // Real savings from ad blocking + background blocking
-        long realSaved = DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get();
-        long realAds = DataSaverVpnService.blockedAdRequests.get();
-        long realBgSyncs = DataSaverVpnService.blockedBgSyncs.get();
-        double pct = totalAppData > 0 ? (realSaved * 100.0 / totalAppData) : 0;
+        // Real savings: always use the HIGHER of SharedPreferences or live VPN counters
+        long spAdBytes = prefs().getLong("real_ad_bytes", 0);
+        long spBgBytes = prefs().getLong("real_bg_bytes", 0);
+        long spAdReqs = prefs().getLong("real_ad_requests", 0);
+        long spBgSyncs = prefs().getLong("real_bg_syncs", 0);
+        long liveAdBytes = DataSaverVpnService.blockedAdBytes.get();
+        long liveBgBytes = DataSaverVpnService.blockedBgBytes.get();
+        long liveAdReqs = DataSaverVpnService.blockedAdRequests.get();
+        long liveBgSyncs = DataSaverVpnService.blockedBgSyncs.get();
+        long realSaved = Math.max(spAdBytes + spBgBytes, liveAdBytes + liveBgBytes);
+        long realBlocked = Math.max(spAdReqs + spBgSyncs, liveAdReqs + liveBgSyncs);
+        // Never show saved > used
+        if (realSaved > totalAppData && totalAppData > 0) realSaved = (long)(totalAppData * 0.10);
+        double pct = totalAppData > 0 ? Math.min((realSaved * 100.0 / totalAppData), 99.9) : 0;
 
         tvUsed.setText(formatBytes(totalAppData));
         tvSaved.setText(formatBytes(realSaved));
@@ -2263,7 +2555,7 @@ public class MainActivity extends Activity {
         TextView tvRealData = findViewById(R.id.tvRealDataSaved);
         TextView tvRealMoney = findViewById(R.id.tvRealMoneySaved);
         if (tvRealAds != null) {
-            tvRealAds.setText(String.valueOf(realAds + realBgSyncs));
+            tvRealAds.setText(String.valueOf(realBlocked));
             tvRealData.setText(formatBytes(realSaved));
             tvRealMoney.setText(formatNaira(bytesToNaira(realSaved)));
         }

@@ -52,6 +52,7 @@ public class DataSaverVpnService extends VpnService {
     private volatile boolean running = false;
     private Set<String> adDomains = new HashSet<>();
     private volatile String foregroundPackage = "";
+    private String userPlan = "basic";
     private PowerManager.WakeLock wakeLock;
 
     // System packages that should never be blocked (even in background)
@@ -94,7 +95,8 @@ public class DataSaverVpnService extends VpnService {
     private void startVpn() {
         if (running) return;
 
-        loadAdBlockList();
+        userPlan = getSharedPreferences("datasaver", MODE_PRIVATE).getString("subscription_plan", "basic");
+ loadAdBlockList();
         buildSystemWhitelist();
         restoreSavings();
         createNotificationChannel();
@@ -129,6 +131,9 @@ public class DataSaverVpnService extends VpnService {
 
             // Exclude our own app
             try { builder.addDisallowedApplication(getPackageName()); } catch (Exception e) {}
+            // Default bypass: banking and payment apps should never go through VPN
+            String[] defaultBypass = {"com.gtbank.gtworldapp","com.accessbank.accessbankapp","com.zenithbank.eazymoney","com.firstbanknigeria.firstmobile","ng.opay","com.palmpay.app","com.kuda.app"};
+            for (String pkg : defaultBypass) { try { builder.addDisallowedApplication(pkg); } catch (Exception e) {} }
 
             // Split tunneling — exclude bypass apps
             SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
@@ -149,7 +154,10 @@ public class DataSaverVpnService extends VpnService {
             running = true;
             isVpnRunning = true;
 
-            new Thread(this::processPackets, "VPN-Packets").start();
+            // Warmup delay — don't count blocks for first 3 seconds to prevent the "jump"
+            final long warmupEnd = System.currentTimeMillis() + 3000;
+
+            new Thread(() -> processPackets(warmupEnd), "VPN-Packets").start();
             new Thread(this::detectForegroundApp, "VPN-FgDetect").start();
 
             Log.i(TAG, "VPN started — Ads: " + adDomains.size() + " domains, BG Guard: ON");
@@ -182,7 +190,7 @@ public class DataSaverVpnService extends VpnService {
      * Main packet processing loop.
      * Handles DNS packets: blocks ads, blocks background app DNS, forwards foreground DNS.
      */
-    private void processPackets() {
+    private void processPackets(long warmupEnd) {
         FileInputStream in = new FileInputStream(vpnInterface.getFileDescriptor());
         FileOutputStream out = new FileOutputStream(vpnInterface.getFileDescriptor());
         byte[] packetData = new byte[32767];
@@ -229,10 +237,12 @@ public class DataSaverVpnService extends VpnService {
                             if (domain != null) {
                                 // 1. AD BLOCKING — always block ad domains
                                 if (isAdDomain(domain)) {
-                                    blockedAdRequests.incrementAndGet();
-                                    long estSize = getEstimatedAdSize(domain);
-                                    blockedAdBytes.addAndGet(estSize);
-                                    Log.d(TAG, "AD blocked: " + domain + " (~" + (estSize/1024) + "KB)");
+                                    if (System.currentTimeMillis() > warmupEnd) {
+                                        blockedAdRequests.incrementAndGet();
+                                        long estSize = getEstimatedAdSize(domain);
+                                        blockedAdBytes.addAndGet(estSize);
+                                    }
+                                    Log.d(TAG, "AD blocked: " + domain);
                                     continue;
                                 }
 
@@ -244,10 +254,12 @@ public class DataSaverVpnService extends VpnService {
 
                                 // 3. BACKGROUND GUARD — block DNS for background apps
                                 if (shouldBlockBackground(domain)) {
-                                    blockedBgSyncs.incrementAndGet();
-                                    long estSize = getEstimatedBgSize(domain);
-                                    blockedBgBytes.addAndGet(estSize);
-                                    Log.d(TAG, "BG blocked: " + domain + " (~" + (estSize/1024) + "KB)");
+                                    if (System.currentTimeMillis() > warmupEnd) {
+                                        blockedBgSyncs.incrementAndGet();
+                                        long estSize = getEstimatedBgSize(domain);
+                                        blockedBgBytes.addAndGet(estSize);
+                                    }
+                                    Log.d(TAG, "BG blocked: " + domain);
                                     continue;
                                 }
 
@@ -279,9 +291,31 @@ public class DataSaverVpnService extends VpnService {
      * We check if the domain belongs to a known app and if that app is NOT in the foreground.
      */
     private boolean shouldBlockBackground(String domain) {
-        // Check if this domain belongs to a known app
-        String appPackage = domainToPackage(domain);
-        if (appPackage == null) return false; // Unknown domain, allow
+        // NEVER block these - they break calling, browsing, essential services
+        if (domain.contains("whatsapp") || domain.contains("signal") ||
+            domain.contains("telegram") || domain.contains("chrome") ||
+            domain.contains("google.com") || domain.contains("googleapis.com") ||
+            domain.contains("gstatic.com") || domain.contains("dropbox") ||
+            domain.contains("grok") || domain.contains("cloudflare") ||
+            domain.contains("akamai") || domain.contains("amazonaws") ||
+            domain.contains("microsoft") || domain.contains("apple.com") ||
+            domain.contains("icloud") || domain.contains("outlook") ||
+            domain.contains("office") || domain.contains("live.com") ||
+            domain.contains("banking") || domain.contains("paystack") ||
+            domain.contains("flutterwave")) return false;
+        // Basic plan: no background blocking
+        if ("basic".equals(userPlan)) return false;
+ // Check if this domain belongs to a known app
+ String appPackage = domainToPackage(domain);
+        if (appPackage == null) return false;
+        // If app is in user's protected list, never block
+        String bypassApps = getSharedPreferences("datasaver", MODE_PRIVATE).getString("bypass_apps", "");
+        if (bypassApps.contains(appPackage)) return false;
+ // Premium: only block social media background
+ if ("premium".equals(userPlan)) {
+ boolean isSocial = appPackage.contains("facebook") || appPackage.contains("instagram") || appPackage.contains("tiktok") || appPackage.contains("musically") || appPackage.contains("twitter") || appPackage.contains("snapchat");
+ if (!isSocial) return false;
+ }
 
         // If the app owning this domain is in the foreground, allow
         if (appPackage.equals(foregroundPackage)) return false;
@@ -568,10 +602,17 @@ public class DataSaverVpnService extends VpnService {
     private void restoreSavings() {
         try {
             SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
-            blockedAdBytes.set(sp.getLong("real_ad_bytes", 0));
-            blockedBgBytes.set(sp.getLong("real_bg_bytes", 0));
-            blockedAdRequests.set(sp.getLong("real_ad_requests", 0));
-            blockedBgSyncs.set(sp.getLong("real_bg_syncs", 0));
+            // Never go backwards - use max of current and saved
+            long sAd = sp.getLong("real_ad_bytes", 0);
+            long sBg = sp.getLong("real_bg_bytes", 0);
+            long sAdR = sp.getLong("real_ad_requests", 0);
+            long sBgS = sp.getLong("real_bg_syncs", 0);
+            if (sAd > blockedAdBytes.get()) blockedAdBytes.set(sAd);
+            if (sBg > blockedBgBytes.get()) blockedBgBytes.set(sBg);
+            if (sAdR > blockedAdRequests.get()) blockedAdRequests.set(sAdR);
+            if (sBgS > blockedBgSyncs.get()) blockedBgSyncs.set(sBgS);
+
+
             totalPacketsProcessed.set(sp.getLong("real_total_packets", 0));
             Log.i(TAG, "Restored savings: ads=" + blockedAdRequests.get() + " bg=" + blockedBgSyncs.get());
         } catch (Exception e) {}
