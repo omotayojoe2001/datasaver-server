@@ -708,7 +708,6 @@ function loadDataPricing(tabHtml) {
       rows += '<td>' + fmtMoney(cost) + '</td>';
       rows += '<td>' + sellDisplay + '</td>';
       rows += '<td style="color:' + profitColor + ';font-weight:bold">' + (sell > 0 ? fmtMoney(profit) : '-') + '</td>';
-      rows += '<td>' + (p.duration||'-') + '</td>';
       rows += '<td>' + (p.data_id||'-') + '</td>';
       rows += '<td>' + (p.active ? '<span style="color:#43A047;font-weight:bold">YES</span>' : '<span style="color:#999">NO</span>') + '</td>';
       rows += '<td>';
@@ -727,8 +726,8 @@ function loadDataPricing(tabHtml) {
       + '<option value="9MOBILE"' + (netFilter==='9MOBILE'?' selected':'') + '>9MOBILE</option>'
       + '</select></div>'
       + '<div class="table-wrap"><table>'
-      + '<tr><th>Network</th><th>Size</th><th>Cost (DataStation)</th><th>Your Selling Price</th><th>Profit</th><th>Duration</th><th>Plan ID</th><th>Active</th><th>Actions</th></tr>'
-      + (rows || '<tr><td colspan="9"><div class="empty-state"><p>No data plans yet</p></div></td></tr>')
+      + '<tr><th>Network</th><th>Size</th><th>Cost (DataStation)</th><th>Your Selling Price</th><th>Profit</th><th>Plan ID</th><th>Active</th><th>Actions</th></tr>'
+      + (rows || '<tr><td colspan="8"><div class="empty-state"><p>No data plans yet</p></div></td></tr>')
       + '</table></div>'
       + '<p style="color:#888;font-size:12px;margin-top:12px"><b>Cost</b> = DataStation price. <b>Selling Price</b> = what you charge users. Set via Edit.</p>';
   });
@@ -757,7 +756,6 @@ function createPlanModal() {
     + '<label>Size (e.g. 1GB, 500MB)</label><input id="planSize" placeholder="1GB">'
     + '<label>Cost Price - DataStation (\u20a6)</label><input id="planCost" type="number" placeholder="250">'
     + '<label>Your Selling Price (\u20a6)</label><input id="planSell" type="number" placeholder="300">'
-    + '<label>Duration (e.g. 30 days)</label><input id="planDuration" placeholder="30 days">'
     + '<label>DataStation Plan ID</label><input id="planDataId" placeholder="e.g. 1 or 25">'
     + '<div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-save" onclick="saveNewPlan()">Add Plan</button></div>'
   );
@@ -769,7 +767,6 @@ function saveNewPlan() {
     size: document.getElementById('planSize').value,
     amount: parseFloat(document.getElementById('planCost').value) || 0,
     selling_price: parseFloat(document.getElementById('planSell').value) || 0,
-    duration: document.getElementById('planDuration').value,
     data_id: document.getElementById('planDataId').value,
     active: true
   };
@@ -786,7 +783,6 @@ function editPlan(idx) {
     + '<label>Size</label><input id="planSize" value="' + (p.size||'') + '">'
     + '<label>Cost Price - DataStation (\u20a6)</label><input id="planCost" type="number" value="' + (p.amount||0) + '">'
     + '<label>Your Selling Price (\u20a6)</label><input id="planSell" type="number" value="' + (p.selling_price||0) + '">'
-    + '<label>Duration</label><input id="planDuration" value="' + (p.duration||'') + '">'
     + '<label>DataStation Plan ID</label><input id="planDataId" value="' + (p.data_id||'') + '">'
     + '<div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-save" onclick="updatePlan(' + idx + ')">Save</button></div>'
   );
@@ -800,7 +796,6 @@ function updatePlan(idx) {
     size: document.getElementById('planSize').value,
     amount: parseFloat(document.getElementById('planCost').value) || 0,
     selling_price: parseFloat(document.getElementById('planSell').value) || 0,
-    duration: document.getElementById('planDuration').value,
     data_id: document.getElementById('planDataId').value
   };
   api('/api/data-plans/' + p.id, { method: 'POST', body: JSON.stringify(body) })
