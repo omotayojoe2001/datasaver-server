@@ -682,12 +682,18 @@ function loadPricing() {
   const netFilter = document.getElementById('pricingNet') ? document.getElementById('pricingNet').value : '';
   api('/api/data-plans?network=' + netFilter).then(plans => {
     if (!Array.isArray(plans)) plans = [];
+    allPlans = plans;
     let rows = '';
     plans.forEach(p => {
+      const cost = parseFloat(p.cost_price||0);
+      const sell = parseFloat(p.amount||0);
+      const profit = sell - cost;
       rows += `<tr>
         <td>${p.network||'-'}</td>
         <td>${p.size||'-'}</td>
-        <td>${fmtMoney(p.amount)}</td>
+        <td>${fmtMoney(cost)}</td>
+        <td>${fmtMoney(sell)}</td>
+        <td style="color:${profit>0?'#2e7d32':'#c62828'};font-weight:bold">${fmtMoney(profit)}</td>
         <td>${p.duration||'-'}</td>
         <td>${p.data_id||'-'}</td>
         <td>${p.active ? '<span style="color:#43A047;font-weight:bold">YES</span>' : '<span style="color:#999">NO</span>'}</td>
@@ -710,10 +716,10 @@ function loadPricing() {
         </select>
       </div>
       <div class="table-wrap"><table>
-        <tr><th>Network</th><th>Size</th><th>Price</th><th>Duration</th><th>Plan ID</th><th>Active</th><th>Actions</th></tr>
-        ${rows || '<tr><td colspan="7"><div class="empty-state"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><p>No data plans yet — click "+ Add Plan" to create one</p></div></td></tr>'}
+        <tr><th>Network</th><th>Size</th><th>Cost (DataStation)</th><th>Selling Price</th><th>Profit</th><th>Duration</th><th>Plan ID</th><th>Active</th><th>Actions</th></tr>
+        ${rows || '<tr><td colspan="9"><div class="empty-state"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><p>No data plans yet — click "+ Add Plan" to create one</p></div></td></tr>'}
       </table></div>
-      <p style="color:#888;font-size:12px;margin-top:12px">Plan ID = DataStation API plan ID. Price = what users pay from their wallet.</p>
+      <p style="color:#888;font-size:12px;margin-top:12px"><b>Cost</b> = what DataStation charges you. <b>Selling Price</b> = what users pay. <b>Profit</b> = your margin per sale.</p>
     `;
   });
 }
@@ -724,7 +730,8 @@ function createPlanModal() {
     <label>Network</label>
     <select id="planNetwork"><option value="MTN">MTN</option><option value="GLO">GLO</option><option value="AIRTEL">AIRTEL</option><option value="9MOBILE">9MOBILE</option></select>
     <label>Size (e.g. 1GB, 500MB)</label><input id="planSize" placeholder="1GB">
-    <label>Price (₦)</label><input id="planAmount" type="number" placeholder="300">
+    <label>Cost Price - DataStation (₦)</label><input id="planCost" type="number" placeholder="250">
+    <label>Selling Price - Users Pay (₦)</label><input id="planAmount" type="number" placeholder="300">
     <label>Duration (e.g. 30 days, 7 days)</label><input id="planDuration" placeholder="30 days">
     <label>DataStation Plan ID</label><input id="planDataId" placeholder="e.g. 1 or 25">
     <div class="modal-actions">
@@ -738,41 +745,42 @@ function saveNewPlan() {
   const body = {
     network: document.getElementById('planNetwork').value,
     size: document.getElementById('planSize').value,
+    cost_price: parseFloat(document.getElementById('planCost').value) || 0,
     amount: parseFloat(document.getElementById('planAmount').value) || 0,
     duration: document.getElementById('planDuration').value,
     data_id: document.getElementById('planDataId').value,
     active: true
   };
-  if (!body.size || !body.amount) { alert('Size and price required'); return; }
+  if (!body.size || !body.amount) { alert('Size and selling price required'); return; }
   api('/api/data-plans', { method: 'POST', body: JSON.stringify(body) })
     .then(r => { if (r.success) { hideModal(); loadPricing(); } else alert(r.error||'Failed'); });
 }
 
+let allPlans = [];
 function editPlan(id) {
-  api('/api/data-plans').then(plans => {
-    if (!Array.isArray(plans)) plans = [];
-    const p = plans.find(x => x.id === id);
-    if (!p) return;
-    showModal(`
-      <h3>Edit Data Plan</h3>
-      <label>Network</label>
-      <select id="planNetwork"><option value="MTN" ${p.network==='MTN'?'selected':''}>MTN</option><option value="GLO" ${p.network==='GLO'?'selected':''}>GLO</option><option value="AIRTEL" ${p.network==='AIRTEL'?'selected':''}>AIRTEL</option><option value="9MOBILE" ${p.network==='9MOBILE'?'selected':''}>9MOBILE</option></select>
-      <label>Size</label><input id="planSize" value="${p.size||''}">
-      <label>Price (₦)</label><input id="planAmount" type="number" value="${p.amount||0}">
-      <label>Duration</label><input id="planDuration" value="${p.duration||''}">
-      <label>DataStation Plan ID</label><input id="planDataId" value="${p.data_id||''}">
-      <div class="modal-actions">
-        <button class="btn-cancel" onclick="hideModal()">Cancel</button>
-        <button class="btn-save" onclick="updatePlan('${id}')">Save</button>
-      </div>
-    `);
-  });
+  const p = allPlans.find(x => x.id === id);
+  if (!p) return;
+  showModal(`
+    <h3>Edit Data Plan</h3>
+    <label>Network</label>
+    <select id="planNetwork"><option value="MTN" ${p.network==='MTN'?'selected':''}>MTN</option><option value="GLO" ${p.network==='GLO'?'selected':''}>GLO</option><option value="AIRTEL" ${p.network==='AIRTEL'?'selected':''}>AIRTEL</option><option value="9MOBILE" ${p.network==='9MOBILE'?'selected':''}>9MOBILE</option></select>
+    <label>Size</label><input id="planSize" value="${p.size||''}">
+    <label>Cost Price - DataStation (₦)</label><input id="planCost" type="number" value="${p.cost_price||0}">
+    <label>Selling Price - Users Pay (₦)</label><input id="planAmount" type="number" value="${p.amount||0}">
+    <label>Duration</label><input id="planDuration" value="${p.duration||''}">
+    <label>DataStation Plan ID</label><input id="planDataId" value="${p.data_id||''}">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="hideModal()">Cancel</button>
+      <button class="btn-save" onclick="updatePlan('${id}')">Save</button>
+    </div>
+  `);
 }
 
 function updatePlan(id) {
   const body = {
     network: document.getElementById('planNetwork').value,
     size: document.getElementById('planSize').value,
+    cost_price: parseFloat(document.getElementById('planCost').value) || 0,
     amount: parseFloat(document.getElementById('planAmount').value) || 0,
     duration: document.getElementById('planDuration').value,
     data_id: document.getElementById('planDataId').value
