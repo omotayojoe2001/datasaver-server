@@ -4,3 +4,5 @@ android-lite/gen/
 android-lite/out/
 node_modules/
 server/server.log
+.env
+server/.env
