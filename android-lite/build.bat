@@ -2,7 +2,7 @@
 setlocal
 
 set ANDROID_HOME=C:\Android\sdk
-set BUILD_TOOLS=%ANDROID_HOME%\build-tools\34.0.0
+set BUILD_TOOLS=%ANDROID_HOME%\build-tools\35.0.0
 set PLATFORM=%ANDROID_HOME%\platforms\android-33\android.jar
 
 set PROJECT=c:\Users\user\Pictures\dataapp\android-lite
@@ -32,7 +32,7 @@ if errorlevel 1 (
 )
 
 echo [3/7] Compiling Java...
-javac --release 11 -classpath "%PLATFORM%" -d "%BIN%\classes" "%SRC%\com\datasaver\MainActivity.java" "%SRC%\com\datasaver\DataSaverService.java" "%SRC%\com\datasaver\DataSaverVpnService.java" "%GEN%\com\datasaver\R.java"
+javac -source 1.8 -target 1.8 -classpath "%PLATFORM%" -d "%BIN%\classes" "%SRC%\com\datasaver\MainActivity.java" "%SRC%\com\datasaver\DataSaverService.java" "%SRC%\com\datasaver\DataSaverVpnService.java" "%GEN%\com\datasaver\R.java"
 if errorlevel 1 (
     echo ERROR: javac failed
     exit /b 1

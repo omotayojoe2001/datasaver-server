@@ -10,7 +10,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
+// Increase JSON body limit for proof uploads
+app.use(express.json({ limit: '10mb' }));
 
 // ============================================
 // SUPABASE
@@ -138,6 +139,8 @@ app.post('/api/savings/sync', async (req, res) => {
   try {
     const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Update user totals
     await supabase.from('users').update({
       total_saved_bytes: saved_bytes || 0,
       total_blocked_requests: blocked_requests || 0,
@@ -145,7 +148,68 @@ app.post('/api/savings/sync', async (req, res) => {
       bg_bytes_saved: bg_bytes || 0,
       last_savings_sync: new Date().toISOString()
     }).eq('id', user.id);
+
+    // Also save daily snapshot
+    const today = new Date().toISOString().split('T')[0];
+    const { data: existing } = await supabase.from('savings_history')
+      .select('id').eq('user_id', user.id).eq('date', today).single();
+    if (existing) {
+      await supabase.from('savings_history').update({
+        saved_bytes: saved_bytes || 0,
+        blocked_requests: blocked_requests || 0,
+        ad_bytes: ad_bytes || 0,
+        bg_bytes: bg_bytes || 0
+      }).eq('id', existing.id);
+    } else {
+      await supabase.from('savings_history').insert({
+        user_id: user.id, date: today,
+        saved_bytes: saved_bytes || 0,
+        blocked_requests: blocked_requests || 0,
+        ad_bytes: ad_bytes || 0,
+        bg_bytes: bg_bytes || 0
+      });
+    }
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/savings/:phone  — get savings history
+app.get('/api/savings/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests, ad_bytes_saved, bg_bytes_saved').eq('phone', req.params.phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Get daily history (last 30 days)
+    const { data: history } = await supabase.from('savings_history')
+      .select('*').eq('user_id', user.id)
+      .order('date', { ascending: false }).limit(30);
+
+    // Calculate today/week/month totals
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    let todaySaved = 0, weekSaved = 0, monthSaved = 0;
+    let todayBlocked = 0, weekBlocked = 0, monthBlocked = 0;
+    if (history) {
+      for (const h of history) {
+        if (h.date === todayStr) { todaySaved = h.saved_bytes; todayBlocked = h.blocked_requests; }
+        if (h.date >= weekAgo) { weekSaved += h.saved_bytes; weekBlocked += h.blocked_requests; }
+        if (h.date >= monthAgo) { monthSaved += h.saved_bytes; monthBlocked += h.blocked_requests; }
+      }
+    }
+
+    res.json({
+      total_saved: user.total_saved_bytes || 0,
+      total_blocked: user.total_blocked_requests || 0,
+      today: { saved: todaySaved, blocked: todayBlocked },
+      week: { saved: weekSaved, blocked: weekBlocked },
+      month: { saved: monthSaved, blocked: monthBlocked },
+      history: history || []
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -582,6 +646,123 @@ app.post('/api/wallet/topup', async (req, res) => {
     res.json({ success: true, balance: newBal });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ============================================
+// TASKS & EARN
+// ============================================
+
+// GET /api/tasks?phone=xxx — list tasks + user's status on each
+app.get('/api/tasks', async (req, res) => {
+  const { phone } = req.query;
+  try {
+    const { data: tasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
+    let pending_reward = 0, claimable_reward = 0;
+    let userTasks = [];
+    if (phone) {
+      const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+      if (user) {
+        const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
+        const subMap = {};
+        if (submissions) {
+          for (const s of submissions) {
+            subMap[s.task_id] = s.status;
+            if (s.status === 'pending') pending_reward += s.reward || 0;
+            if (s.status === 'approved') claimable_reward += s.reward || 0;
+          }
+        }
+        if (tasks) {
+          for (const t of tasks) {
+            t.user_status = subMap[t.id] || 'available';
+          }
+        }
+      }
+    }
+    res.json({ tasks: tasks || [], pending_reward, claimable_reward });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/tasks/submit  { phone, task_id, proof_base64 }
+app.post('/api/tasks/submit', async (req, res) => {
+  const { phone, task_id, proof_base64 } = req.body;
+  if (!phone || !task_id) return res.status(400).json({ error: 'phone and task_id required' });
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { data: task } = await supabase.from('tasks').select('*').eq('id', task_id).single();
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    // Check if already submitted
+    const { data: existing } = await supabase.from('task_submissions').select('id').eq('user_id', user.id).eq('task_id', task_id).single();
+    if (existing) return res.status(409).json({ error: 'You already submitted this task' });
+
+    // Upload proof to Supabase Storage or save as URL
+    let proofUrl = null;
+    if (proof_base64) {
+      try {
+        const fileName = `proofs/${user.id}/${task_id}_${Date.now()}.jpg`;
+        const buffer = Buffer.from(proof_base64, 'base64');
+        const { data: upload, error: uploadErr } = await supabase.storage
+          .from('task-proofs')
+          .upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });
+        if (uploadErr) {
+          console.log('Storage upload error:', uploadErr.message, '- saving as data URI fallback');
+          // Fallback: save a truncated base64 as proof_url (first 200KB)
+          const truncated = proof_base64.substring(0, 200000);
+          proofUrl = 'data:image/jpeg;base64,' + truncated;
+        } else {
+          const { data: urlData } = supabase.storage.from('task-proofs').getPublicUrl(fileName);
+          proofUrl = urlData.publicUrl;
+        }
+      } catch (storageErr) {
+        console.log('Storage error:', storageErr.message);
+        const truncated = proof_base64.substring(0, 200000);
+        proofUrl = 'data:image/jpeg;base64,' + truncated;
+      }
+    }
+
+    await supabase.from('task_submissions').insert({
+      user_id: user.id, task_id, status: 'pending',
+      reward: task.reward || 0, reward_type: task.reward_type || 'airtime',
+      proof_url: proofUrl
+    });
+    res.json({ success: true, message: 'Proof submitted! Awaiting review.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/tasks/claim  { phone } — claim all approved rewards
+app.post('/api/tasks/claim', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  try {
+    const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { data: approved } = await supabase.from('task_submissions').select('id, reward, reward_type').eq('user_id', user.id).eq('status', 'approved');
+    if (!approved || approved.length === 0) return res.status(400).json({ error: 'No rewards to claim' });
+    let totalReward = 0;
+    const ids = [];
+    for (const s of approved) { totalReward += s.reward || 0; ids.push(s.id); }
+    // Credit wallet with reward amount
+    const newBal = parseFloat(user.wallet_balance || 0) + totalReward;
+    await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount: totalReward, status: 'success', description: 'Task reward earned (' + approved.length + ' task' + (approved.length > 1 ? 's' : '') + ')' });
+    // Mark as claimed
+    for (const id of ids) { await supabase.from('task_submissions').update({ status: 'claimed' }).eq('id', id); }
+    res.json({ success: true, message: '\u20a6' + totalReward + ' added to your wallet! Use it to buy airtime or data.', amount: totalReward, balance: newBal });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// ADMIN PANEL
+// ============================================
+const adminRoutes = require('./admin/routes.js')(supabase);
+const path = require('path');
+app.use('/admin', adminRoutes);
+app.get('/admin', (req, res) => { res.sendFile(path.join(__dirname, 'admin', 'admin.html')); });
 
 // ============================================
 // PRIVACY POLICY

@@ -68,6 +68,19 @@
             android:paddingTop="6dp" />
 
         <TextView
+            android:id="@+id/navEarn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Earn"
+            android:textSize="11sp"
+            android:textColor="#999999"
+            android:drawableTop="@android:drawable/ic_menu_agenda"
+            android:drawablePadding="2dp"
+            android:paddingTop="6dp" />
+
+        <TextView
             android:id="@+id/navProfile"
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -1257,6 +1270,163 @@
     </LinearLayout>
 </ScrollView>
 
+
+<!-- EARN TAB (hidden) -->
+<ScrollView
+    android:id="@+id/tabEarn"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_above="@id/bottomNav"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1565C0"
+            android:padding="20dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Tasks &amp; Earn"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Complete tasks to earn free airtime &amp; data"
+                android:textSize="13sp"
+                android:textColor="#B3FFFFFF"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <!-- Pending Rewards Banner -->
+        <LinearLayout
+            android:id="@+id/earnRewardsBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="@drawable/card_green"
+            android:padding="14dp"
+            android:layout_marginLeft="12dp"
+            android:layout_marginRight="12dp"
+            android:layout_marginTop="12dp"
+            android:gravity="center_vertical">
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Your Rewards"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#1B5E20" />
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="4dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Pending: "
+                        android:textSize="12sp"
+                        android:textColor="#555555" />
+                    <TextView
+                        android:id="@+id/tvEarnPending"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="\u20a60"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#FF8F00" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="   Claimable: "
+                        android:textSize="12sp"
+                        android:textColor="#555555" />
+                    <TextView
+                        android:id="@+id/tvEarnClaimable"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="\u20a60"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#43A047" />
+                </LinearLayout>
+            </LinearLayout>
+            <TextView
+                android:id="@+id/btnClaimRewards"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="CLAIM"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#43A047"
+                android:paddingLeft="14dp"
+                android:paddingRight="14dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
+        </LinearLayout>
+
+        <!-- Tasks List -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp"
+            android:paddingTop="16dp"
+            android:paddingBottom="8dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Available Tasks"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#333333" />
+            <TextView
+                android:id="@+id/btnRefreshTasks"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Refresh"
+                android:textSize="12sp"
+                android:textColor="#1565C0" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/earnTasksContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:id="@+id/tvNoTasks"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Loading tasks..."
+            android:textSize="13sp"
+            android:textColor="#999999"
+            android:gravity="center"
+            android:padding="24dp" />
+
+    </LinearLayout>
+</ScrollView>
 
 <!-- PROFILE TAB (hidden) -->
 <ScrollView

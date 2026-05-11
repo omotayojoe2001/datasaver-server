@@ -3,100 +3,82 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="24dp"
-    android:gravity="center_horizontal">
+    android:background="#FAFAFA">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="DataSaver"
-        android:textSize="28sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="8dp" />
-
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="🔴 Off"
-        android:textSize="18sp"
-        android:layout_marginBottom="24dp" />
-
-    <!-- Server config -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Server Address:"
-        android:textSize="14sp" />
-
+    <!-- Top bar with toggle -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginBottom="16dp">
-
-        <EditText
-            android:id="@+id/etServerHost"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="3"
-            android:hint="Server IP"
-            android:inputType="text"
-            android:textSize="14sp" />
+        android:orientation="vertical"
+        android:background="#4CAF50"
+        android:padding="20dp">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text=" : "
-            android:textSize="14sp" />
+            android:text="DataSaver"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="4dp" />
 
-        <EditText
-            android:id="@+id/etServerPort"
-            android:layout_width="0dp"
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="Port"
-            android:inputType="number"
-            android:textSize="14sp" />
+            android:text="🔴 Off"
+            android:textSize="14sp"
+            android:textColor="#E8F5E9"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tvSaved"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="13sp"
+            android:textColor="#C8E6C9"
+            android:layout_marginBottom="12dp" />
+
+        <Button
+            android:id="@+id/btnToggle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="▶ START DATA SAVER"
+            android:textSize="16sp"
+            android:backgroundTint="#FFFFFF"
+            android:textColor="#4CAF50"
+            android:padding="12dp" />
     </LinearLayout>
 
-    <Button
-        android:id="@+id/btnToggle"
+    <!-- App usage section -->
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="▶ START DATA SAVER"
-        android:textSize="18sp"
+        android:text="App Data Usage (Last 30 days)"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:textColor="#333333"
         android:padding="16dp"
-        android:layout_marginBottom="16dp" />
-
-    <Button
-        android:id="@+id/btnTest"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="🧪 Test Compression"
-        android:textSize="16sp"
-        android:padding="12dp"
-        android:layout_marginBottom="24dp" />
+        android:paddingBottom="8dp" />
 
     <TextView
-        android:id="@+id/tvTestResult"
+        android:id="@+id/tvLoading"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Tap 'Test Compression' to verify the server is working"
+        android:text="Loading app usage..."
         android:textSize="14sp"
-        android:fontFamily="monospace"
-        android:background="#f0f0f0"
+        android:textColor="#999999"
+        android:gravity="center"
         android:padding="16dp"
-        android:layout_marginBottom="16dp" />
+        android:visibility="gone" />
 
-    <TextView
-        android:id="@+id/tvStats"
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvApps"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="No data saved yet"
-        android:textSize="14sp"
-        android:fontFamily="monospace"
-        android:background="#e8f5e9"
-        android:padding="16dp" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingBottom="16dp" />
 
 </LinearLayout>

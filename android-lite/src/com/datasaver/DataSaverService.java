@@ -113,7 +113,11 @@ public class DataSaverService extends Service {
         running = true;
         isRunning = true;
 
-        new Thread(new StatsPoller()).start();
+        new Thread(() -> {
+            while (running) {
+                try { updateStats(); Thread.sleep(2000); } catch (Exception e) { break; }
+            }
+        }).start();
         Log.i(TAG, "Monitoring started, cached " + packageUids.size() + " apps");
     }
 
@@ -402,16 +406,7 @@ public class DataSaverService extends Service {
         }
     }
 
-    class StatsPoller implements Runnable {
-        public void run() {
-            while (running) {
-                try {
-                    updateStats();
-                    Thread.sleep(2000);
-                } catch (Exception e) { break; }
-            }
-        }
-    }
+
 
     private void stop() {
         running = false;

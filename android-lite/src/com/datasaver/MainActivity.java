@@ -56,8 +56,8 @@ public class MainActivity extends Activity {
     private TextView tvStatus, tvUsed, tvSaved, tvSavedPct, tvAppUsageEmpty;
     private View barUsed, barSaved;
     private LinearLayout appUsageContainer;
-    private TextView navHome, navAirtime, navData, navTransactions, navProfile;
-    private ScrollView tabHome, tabAirtime, tabData, tabTransactions, tabProfile;
+    private TextView navHome, navAirtime, navData, navTransactions, navEarn, navProfile;
+    private ScrollView tabHome, tabAirtime, tabData, tabTransactions, tabEarn, tabProfile;
     private Handler handler = new Handler(Looper.getMainLooper());
     private boolean polling = false;
 
@@ -153,12 +153,14 @@ public class MainActivity extends Activity {
         navAirtime = findViewById(R.id.navAirtime);
         navData = findViewById(R.id.navData);
         navTransactions = findViewById(R.id.navTransactions);
+        navEarn = findViewById(R.id.navEarn);
         navProfile = findViewById(R.id.navProfile);
 
         tabHome = findViewById(R.id.contentArea);
         tabAirtime = findViewById(R.id.tabAirtime);
         tabData = findViewById(R.id.tabData);
         tabTransactions = findViewById(R.id.tabTransactions);
+        tabEarn = findViewById(R.id.tabEarn);
         tabProfile = findViewById(R.id.tabProfile);
 
         toggleAirtime = findViewById(R.id.toggleAirtime);
@@ -180,7 +182,8 @@ public class MainActivity extends Activity {
         navAirtime.setOnClickListener(v -> switchTab(1));
         navData.setOnClickListener(v -> switchTab(2));
         navTransactions.setOnClickListener(v -> switchTab(3));
-        navProfile.setOnClickListener(v -> switchTab(4));
+        navEarn.setOnClickListener(v -> switchTab(4));
+        navProfile.setOnClickListener(v -> switchTab(5));
 
         btnMTN.setOnClickListener(v -> selectNetwork("MTN"));
         btnAirtel.setOnClickListener(v -> selectNetwork("AIRTEL"));
@@ -253,6 +256,7 @@ public class MainActivity extends Activity {
         initTips();
         initSavingsCard();
         initFingerprintLogin();
+        initEarnTab();
     }
 
     // ==================== TIPS ====================
@@ -318,11 +322,28 @@ public class MainActivity extends Activity {
                 long serverBlocked = res.optLong("total_blocked", 0);
                 // Use server values if they're higher than local
                 if (serverTotal > DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get()) {
-                    // Split between ad and bg (rough estimate)
-                    DataSaverVpnService.blockedAdBytes.set(serverTotal / 2);
-                    DataSaverVpnService.blockedBgBytes.set(serverTotal - serverTotal / 2);
-                    DataSaverVpnService.blockedAdRequests.set(serverBlocked / 2);
-                    DataSaverVpnService.blockedBgSyncs.set(serverBlocked - serverBlocked / 2);
+                    // Server has higher total — restore it. Keep existing ratio or default to ad bytes
+                    long currentAd = DataSaverVpnService.blockedAdBytes.get();
+                    long currentBg = DataSaverVpnService.blockedBgBytes.get();
+                    if (currentAd + currentBg > 0) {
+                        // Scale up proportionally
+                        double ratio = (double) serverTotal / (currentAd + currentBg);
+                        DataSaverVpnService.blockedAdBytes.set((long)(currentAd * ratio));
+                        DataSaverVpnService.blockedBgBytes.set(serverTotal - (long)(currentAd * ratio));
+                    } else {
+                        DataSaverVpnService.blockedAdBytes.set(serverTotal);
+                    }
+                    if (serverBlocked > DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get()) {
+                        long currentAdR = DataSaverVpnService.blockedAdRequests.get();
+                        long currentBgR = DataSaverVpnService.blockedBgSyncs.get();
+                        if (currentAdR + currentBgR > 0) {
+                            double ratio = (double) serverBlocked / (currentAdR + currentBgR);
+                            DataSaverVpnService.blockedAdRequests.set((long)(currentAdR * ratio));
+                            DataSaverVpnService.blockedBgSyncs.set(serverBlocked - (long)(currentAdR * ratio));
+                        } else {
+                            DataSaverVpnService.blockedAdRequests.set(serverBlocked);
+                        }
+                    }
                     // Also save to SharedPreferences
                     prefs().edit()
                         .putLong("real_ad_bytes", DataSaverVpnService.blockedAdBytes.get())
@@ -945,7 +966,13 @@ public class MainActivity extends Activity {
         selectedDataPlanIndex = idx;
         for (int i = 0; i < dataPlansContainer.getChildCount(); i++) {
             View child = dataPlansContainer.getChildAt(i);
-            child.setBackgroundColor(child.getTag() != null && (int) child.getTag() == idx ? 0xFFE3F2FD : 0xFFFFFFFF);
+            if (child.getTag() != null) {
+                if ((int) child.getTag() == idx) {
+                    child.setBackground(getResources().getDrawable(R.drawable.card_green));
+                } else {
+                    child.setBackground(getResources().getDrawable(R.drawable.card_bg));
+                }
+            }
         }
         try {
             JSONObject plan = fetchedPlans.get(idx);
@@ -2034,14 +2061,24 @@ public class MainActivity extends Activity {
             .setTitle("Log Out")
             .setMessage("Are you sure you want to log out?")
             .setPositiveButton("Log Out", (d, w) -> {
-                // Keep saved stats but clear user data
+                // Keep ALL saved stats including real VPN savings
                 long sRx = prefs().getLong("saved_totalRx", 0);
                 long sTx = prefs().getLong("saved_totalTx", 0);
                 long sSaved = prefs().getLong("saved_totalSaved", 0);
                 float sPct = prefs().getFloat("saved_pct", 0);
+                long rAd = prefs().getLong("real_ad_bytes", 0);
+                long rBg = prefs().getLong("real_bg_bytes", 0);
+                long rAdR = prefs().getLong("real_ad_requests", 0);
+                long rBgS = prefs().getLong("real_bg_syncs", 0);
+                long instTime = prefs().getLong("install_time", 0);
                 prefs().edit().clear().apply();
-                prefs().edit().putLong("saved_totalRx", sRx).putLong("saved_totalTx", sTx)
-                    .putLong("saved_totalSaved", sSaved).putFloat("saved_pct", sPct).apply();
+                prefs().edit()
+                    .putLong("saved_totalRx", sRx).putLong("saved_totalTx", sTx)
+                    .putLong("saved_totalSaved", sSaved).putFloat("saved_pct", sPct)
+                    .putLong("real_ad_bytes", rAd).putLong("real_bg_bytes", rBg)
+                    .putLong("real_ad_requests", rAdR).putLong("real_bg_syncs", rBgS)
+                    .putLong("install_time", instTime)
+                    .apply();
                 if (DataSaverService.isRunning) {
                     Intent i = new Intent(this, DataSaverService.class);
                     i.setAction(DataSaverService.ACTION_STOP);
@@ -2097,6 +2134,20 @@ public class MainActivity extends Activity {
                 startServices();
             } else {
                 Toast.makeText(this, "VPN permission required for data saving", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+        if (requestCode == PICK_PROOF && resultCode == RESULT_OK && data != null) {
+            try {
+                InputStream is = getContentResolver().openInputStream(data.getData());
+                Bitmap bmp = BitmapFactory.decodeStream(is);
+                is.close();
+                if (bmp != null && proofTaskId != null) {
+                    submitTaskProof(proofTaskId, bmp);
+                    proofTaskId = null;
+                }
+            } catch (Exception e) {
+                Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show();
             }
             return;
         }
@@ -2359,9 +2410,10 @@ public class MainActivity extends Activity {
         tabAirtime.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
         tabData.setVisibility(tab == 2 ? View.VISIBLE : View.GONE);
         tabTransactions.setVisibility(tab == 3 ? View.VISIBLE : View.GONE);
-        tabProfile.setVisibility(tab == 4 ? View.VISIBLE : View.GONE);
+        tabEarn.setVisibility(tab == 4 ? View.VISIBLE : View.GONE);
+        tabProfile.setVisibility(tab == 5 ? View.VISIBLE : View.GONE);
 
-        TextView[] navItems = {navHome, navAirtime, navData, navTransactions, navProfile};
+        TextView[] navItems = {navHome, navAirtime, navData, navTransactions, navEarn, navProfile};
         for (int i = 0; i < navItems.length; i++) {
             navItems[i].setTextColor(i == tab ? 0xFF1565C0 : 0xFF999999);
             navItems[i].setTypeface(null, i == tab ? Typeface.BOLD : Typeface.NORMAL);
@@ -2377,7 +2429,8 @@ public class MainActivity extends Activity {
             refreshUsageHistory();
             fetchTransactions();
         }
-        if (tab == 4) { refreshProfileUI(); loadProfilePhoto(); }
+        if (tab == 4) { loadEarnTab(); }
+        if (tab == 5) { refreshProfileUI(); loadProfilePhoto(); }
     }
 
     private boolean hasUsagePermission() {
@@ -2385,6 +2438,316 @@ public class MainActivity extends Activity {
         int mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
                 android.os.Process.myUid(), getPackageName());
         return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    // ==================== EARN TAB ====================
+
+    private LinearLayout earnTasksContainer;
+    private TextView tvNoTasks, tvEarnPending, tvEarnClaimable;
+    private static final int PICK_PROOF = 1003;
+    private String proofTaskId = null;
+
+    private void initEarnTab() {
+        earnTasksContainer = findViewById(R.id.earnTasksContainer);
+        tvNoTasks = findViewById(R.id.tvNoTasks);
+        tvEarnPending = findViewById(R.id.tvEarnPending);
+        tvEarnClaimable = findViewById(R.id.tvEarnClaimable);
+        findViewById(R.id.btnRefreshTasks).setOnClickListener(v -> loadEarnTab());
+        findViewById(R.id.btnClaimRewards).setOnClickListener(v -> claimRewards());
+    }
+
+    private void loadEarnTab() {
+        if (earnTasksContainer == null) initEarnTab();
+        earnTasksContainer.removeAllViews();
+        tvNoTasks.setText("Loading tasks...");
+        tvNoTasks.setVisibility(View.VISIBLE);
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) { tvNoTasks.setText("Login to see tasks"); return; }
+
+        // Fetch tasks and user rewards
+        new Thread(() -> {
+            try {
+                URL url = new URL(SERVER_URL + "/api/tasks?phone=" + phone);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(15000); conn.setReadTimeout(15000);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder(); String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                JSONArray tasks = res.optJSONArray("tasks");
+                int pending = res.optInt("pending_reward", 0);
+                int claimable = res.optInt("claimable_reward", 0);
+                handler.post(() -> {
+                    tvEarnPending.setText("\u20a6" + pending);
+                    tvEarnClaimable.setText("\u20a6" + claimable);
+                    showTasks(tasks);
+                });
+            } catch (Exception e) {
+                handler.post(() -> { tvNoTasks.setText("Could not load tasks. Tap Refresh."); tvNoTasks.setVisibility(View.VISIBLE); });
+            }
+        }).start();
+    }
+
+    private void showTasks(JSONArray tasks) {
+        earnTasksContainer.removeAllViews();
+        if (tasks == null || tasks.length() == 0) {
+            tvNoTasks.setText("No tasks available right now. Check back later!");
+            tvNoTasks.setVisibility(View.VISIBLE);
+            return;
+        }
+        tvNoTasks.setVisibility(View.GONE);
+
+        for (int i = 0; i < tasks.length(); i++) {
+            try {
+                JSONObject task = tasks.getJSONObject(i);
+                String id = task.optString("id");
+                String title = task.optString("title", "Task");
+                String type = task.optString("type", "general"); // video, follow, advert, youtube
+                int reward = task.optInt("reward", 0);
+                String rewardType = task.optString("reward_type", "airtime"); // airtime or data
+                String status = task.optString("user_status", "available"); // available, pending, approved
+
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.HORIZONTAL);
+                card.setBackground(getResources().getDrawable(R.drawable.card_bg));
+                card.setPadding(dp(14), dp(14), dp(14), dp(14));
+                card.setElevation(dp(3));
+                card.setGravity(Gravity.CENTER_VERTICAL);
+                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                cp.bottomMargin = dp(10);
+                card.setLayoutParams(cp);
+
+                // Type icon
+                TextView icon = new TextView(this);
+                String emoji = "\ud83d\udcf1";
+                if ("video".equals(type) || "youtube".equals(type)) emoji = "\ud83c\udfac";
+                else if ("follow".equals(type)) emoji = "\ud83d\udc65";
+                else if ("advert".equals(type)) emoji = "\ud83d\udcfa";
+                icon.setText(emoji);
+                icon.setTextSize(24);
+                icon.setPadding(0, 0, dp(12), 0);
+                card.addView(icon);
+
+                // Text
+                LinearLayout textCol = new LinearLayout(this);
+                textCol.setOrientation(LinearLayout.VERTICAL);
+                textCol.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+                TextView tvTitle = new TextView(this);
+                tvTitle.setText(title);
+                tvTitle.setTextSize(14); tvTitle.setTextColor(0xFF333333); tvTitle.setTypeface(null, Typeface.BOLD);
+                textCol.addView(tvTitle);
+                TextView tvReward = new TextView(this);
+                tvReward.setText("Earn \u20a6" + reward + " " + rewardType);
+                tvReward.setTextSize(12); tvReward.setTextColor(0xFF43A047);
+                textCol.addView(tvReward);
+                card.addView(textCol);
+
+                // Status/action
+                TextView tvStatus = new TextView(this);
+                tvStatus.setTextSize(11); tvStatus.setTypeface(null, Typeface.BOLD);
+                tvStatus.setPadding(dp(10), dp(6), dp(10), dp(6));
+                if ("pending".equals(status)) {
+                    tvStatus.setText("PENDING"); tvStatus.setTextColor(0xFFFF8F00); tvStatus.setBackgroundColor(0xFFFFF3E0);
+                } else if ("approved".equals(status)) {
+                    tvStatus.setText("CLAIM"); tvStatus.setTextColor(0xFFFFFFFF); tvStatus.setBackgroundColor(0xFF43A047);
+                } else if ("claimed".equals(status)) {
+                    tvStatus.setText("DONE \u2713"); tvStatus.setTextColor(0xFF43A047); tvStatus.setBackgroundColor(0xFFE8F5E9);
+                } else {
+                    tvStatus.setText("START"); tvStatus.setTextColor(0xFFFFFFFF); tvStatus.setBackgroundColor(0xFF1565C0);
+                    final JSONObject fTask = task;
+                    card.setOnClickListener(v -> showTaskDetail(fTask));
+                }
+                card.addView(tvStatus);
+                earnTasksContainer.addView(card);
+            } catch (Exception e) {}
+        }
+    }
+
+    private void showTaskDetail(JSONObject task) {
+        String id = task.optString("id");
+        String title = task.optString("title", "Task");
+        String description = task.optString("description", "");
+        String instructions = task.optString("instructions", "");
+        String link = task.optString("link", "");
+        int reward = task.optInt("reward", 0);
+        String rewardType = task.optString("reward_type", "airtime");
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(24), dp(16), dp(24), dp(8));
+
+        // Description
+        if (!description.isEmpty()) {
+            TextView tvDesc = new TextView(this);
+            tvDesc.setText(description);
+            tvDesc.setTextSize(14); tvDesc.setTextColor(0xFF555555);
+            tvDesc.setPadding(0, 0, 0, dp(12));
+            layout.addView(tvDesc);
+        }
+
+        // Reward
+        TextView tvRew = new TextView(this);
+        tvRew.setText("\ud83c\udf81 Reward: \u20a6" + reward + " " + rewardType);
+        tvRew.setTextSize(15); tvRew.setTextColor(0xFF43A047); tvRew.setTypeface(null, Typeface.BOLD);
+        tvRew.setPadding(0, 0, 0, dp(12));
+        layout.addView(tvRew);
+
+        // Instructions
+        if (!instructions.isEmpty()) {
+            TextView tvInst = new TextView(this);
+            tvInst.setText("\ud83d\udcdd Instructions:\n" + instructions);
+            tvInst.setTextSize(13); tvInst.setTextColor(0xFF333333);
+            tvInst.setBackgroundColor(0xFFF5F5F5);
+            tvInst.setPadding(dp(12), dp(10), dp(12), dp(10));
+            layout.addView(tvInst);
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(layout)
+            .setPositiveButton("START TASK", (d, w) -> {
+                // Open the link externally
+                if (!link.isEmpty()) {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(link))); } catch (Exception e) {}
+                }
+                // After a short delay, show proof upload dialog
+                proofTaskId = id;
+                handler.postDelayed(() -> showProofUploadDialog(id, title, reward, rewardType), 2000);
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showProofUploadDialog(String taskId, String title, int reward, String rewardType) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(24), dp(16), dp(24), dp(8));
+
+        TextView tvInfo = new TextView(this);
+        tvInfo.setText("Take a screenshot showing you completed the task, then upload it as proof.");
+        tvInfo.setTextSize(13); tvInfo.setTextColor(0xFF555555);
+        tvInfo.setPadding(0, 0, 0, dp(16));
+        layout.addView(tvInfo);
+
+        TextView tvReward = new TextView(this);
+        tvReward.setText("Reward: \u20a6" + reward + " " + rewardType + " (after approval)");
+        tvReward.setTextSize(13); tvReward.setTextColor(0xFF43A047); tvReward.setTypeface(null, Typeface.BOLD);
+        tvReward.setPadding(0, 0, 0, dp(12));
+        layout.addView(tvReward);
+
+        new AlertDialog.Builder(this)
+            .setTitle("Submit Proof - " + title)
+            .setView(layout)
+            .setPositiveButton("UPLOAD SCREENSHOT", (d, w) -> {
+                proofTaskId = taskId;
+                Intent pick = new Intent(Intent.ACTION_PICK);
+                pick.setType("image/*");
+                startActivityForResult(pick, PICK_PROOF);
+            })
+            .setNeutralButton("Do it later", null)
+            .show();
+    }
+
+    private void submitTaskProof(String taskId, Bitmap proofBitmap) {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) { Toast.makeText(this, "Please login first", Toast.LENGTH_SHORT).show(); return; }
+        Toast.makeText(this, "Submitting proof...", Toast.LENGTH_SHORT).show();
+
+        new Thread(() -> {
+            try {
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                proofBitmap.compress(Bitmap.CompressFormat.JPEG, 60, baos);
+                String base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP);
+
+                URL url = new URL(SERVER_URL + "/api/tasks/submit");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setConnectTimeout(30000); conn.setReadTimeout(30000);
+                conn.setDoOutput(true);
+                JSONObject body = new JSONObject();
+                body.put("phone", phone);
+                body.put("task_id", taskId);
+                body.put("proof_base64", base64);
+                OutputStream os = conn.getOutputStream();
+                os.write(body.toString().getBytes());
+                os.close();
+                int code = conn.getResponseCode();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
+                StringBuilder sb = new StringBuilder(); String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                handler.post(() -> {
+                    if (code < 400 && res.optBoolean("success")) {
+                        showAlertDialog("\u2705 Proof Submitted!", "Your screenshot has been submitted. You'll receive your reward after admin reviews it.");
+                        loadEarnTab();
+                    } else {
+                        showAlertDialog("Submission Failed", res.optString("error", "Could not submit proof. Try again."));
+                    }
+                });
+            } catch (Exception e) {
+                handler.post(() -> Toast.makeText(this, "Upload failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }).start();
+    }
+
+    private void claimRewards() {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) { showAlertDialog("Error", "Please login first"); return; }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Claim Rewards")
+            .setMessage("Your approved rewards will be added to your wallet balance.")
+            .setPositiveButton("Claim Now", (d, w) -> {
+                showAlertDialog("Processing", "Claiming your rewards...");
+                new Thread(() -> {
+                    try {
+                        URL url = new URL(SERVER_URL + "/api/tasks/claim");
+                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("POST");
+                        conn.setRequestProperty("Content-Type", "application/json");
+                        conn.setConnectTimeout(15000); conn.setReadTimeout(15000);
+                        conn.setDoOutput(true);
+                        JSONObject body = new JSONObject();
+                        body.put("phone", phone);
+                        OutputStream os = conn.getOutputStream();
+                        os.write(body.toString().getBytes());
+                        os.close();
+                        int code = conn.getResponseCode();
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                            code >= 400 ? conn.getErrorStream() : conn.getInputStream()));
+                        StringBuilder sb = new StringBuilder(); String line;
+                        while ((line = reader.readLine()) != null) sb.append(line);
+                        reader.close();
+                        JSONObject res = new JSONObject(sb.toString());
+                        handler.post(() -> {
+                            if (code < 400 && res.optBoolean("success")) {
+                                showAlertDialog("\u2705 Rewards Claimed!", res.optString("message", "Rewards added to your wallet!"));
+                                fetchWalletBalance();
+                                loadEarnTab();
+                            } else {
+                                showAlertDialog("No Rewards", res.optString("error", "No approved rewards to claim yet. Complete tasks and wait for admin approval."));
+                            }
+                        });
+                    } catch (Exception e) {
+                        handler.post(() -> showAlertDialog("Error", "Connection failed. Please try again."));
+                    }
+                }).start();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showAlertDialog(String title, String message) {
+        new AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("OK", null)
+            .show();
     }
 
     private static final int VPN_REQUEST_CODE = 1002;
@@ -2417,6 +2780,17 @@ public class MainActivity extends Activity {
     }
 
     private void startServices() {
+        // Request battery optimization exemption (critical for Xiaomi/Oppo/Tecno/Infinix)
+        if (Build.VERSION.SDK_INT >= 23) {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (!pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                try {
+                    Intent bIntent = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    bIntent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(bIntent);
+                } catch (Exception e) {}
+            }
+        }
         Intent i = new Intent(this, DataSaverService.class);
         i.setAction(DataSaverService.ACTION_START);
         if (android.os.Build.VERSION.SDK_INT >= 26) {
