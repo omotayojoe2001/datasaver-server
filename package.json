@@ -1,0 +1,8 @@
+{
+  "name": "datasaver",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server/src/server.js",
+    "build": "cd server && npm install"
+  }
+}
