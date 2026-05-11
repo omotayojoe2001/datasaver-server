@@ -44,7 +44,9 @@ app.get('/api/plans', async (req, res) => {
     }
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+    // Override amount with selling_price for user-facing display
+    const plans = (data || []).map(p => ({ ...p, amount: p.selling_price || p.amount }));
+    res.json(plans);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
