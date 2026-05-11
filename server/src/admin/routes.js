@@ -327,10 +327,12 @@ module.exports = function(supabase) {
       const updates = req.body;
       delete updates.id;
       delete updates.duration;
-      console.log('[PRICING UPDATE] id:', req.params.id, 'body:', JSON.stringify(updates));
-      const { data, error } = await supabase.from('data_plans').update(updates).eq('id', req.params.id).select();
+      const id = parseInt(req.params.id);
+      console.log('[PRICING UPDATE] id:', id, 'body:', JSON.stringify(updates));
+      const { data, error } = await supabase.from('data_plans').update(updates).eq('id', id).select();
       console.log('[PRICING UPDATE] result:', JSON.stringify(data), 'error:', error);
       if (error) return res.status(500).json({ error: error.message });
+      if (!data || data.length === 0) return res.status(404).json({ error: 'Plan not found with id ' + id });
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
