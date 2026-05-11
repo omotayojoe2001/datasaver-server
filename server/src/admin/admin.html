@@ -679,7 +679,17 @@ function doManualTopup() {
 
 // ============ PRICING ============
 var allPlans = [];
+var pricingTab = 'data';
 function loadPricing() {
+  var tabHtml = '<div style="display:flex;gap:0;margin-bottom:16px">' 
+    + '<button class="btn-sm ' + (pricingTab==='data'?'btn-edit':'') + '" onclick="pricingTab=\'data\';loadPricing()" style="padding:8px 20px;border-radius:6px 0 0 6px">Data Plans</button>'
+    + '<button class="btn-sm ' + (pricingTab==='airtime'?'btn-edit':'') + '" onclick="pricingTab=\'airtime\';loadPricing()" style="padding:8px 20px;border-radius:0 6px 6px 0">Airtime</button>'
+    + '</div>';
+  if (pricingTab === 'data') loadDataPricing(tabHtml);
+  else loadAirtimePricing(tabHtml);
+}
+
+function loadDataPricing(tabHtml) {
   var netFilter = document.getElementById('pricingNet') ? document.getElementById('pricingNet').value : '';
   api('/api/data-plans?network=' + netFilter).then(function(plans) {
     if (!Array.isArray(plans)) plans = [];
@@ -707,7 +717,8 @@ function loadPricing() {
       rows += '<button class="btn-sm btn-delete" onclick="deletePlan(' + i + ')">Del</button>';
       rows += '</td></tr>';
     }
-    document.getElementById('page-pricing').innerHTML = '<div class="page-header"><h2>Airtime & Data Pricing (' + plans.length + ')</h2><button class="btn" onclick="createPlanModal()">+ Add Plan</button></div>'
+    document.getElementById('page-pricing').innerHTML = '<div class="page-header"><h2>Pricing</h2><button class="btn" onclick="createPlanModal()">+ Add Data Plan</button></div>'
+      + tabHtml
       + '<div class="filters"><select id="pricingNet" onchange="loadPricing()">'
       + '<option value="">All Networks</option>'
       + '<option value="MTN"' + (netFilter==='MTN'?' selected':'') + '>MTN</option>'
@@ -719,8 +730,25 @@ function loadPricing() {
       + '<tr><th>Network</th><th>Size</th><th>Cost (DataStation)</th><th>Your Selling Price</th><th>Profit</th><th>Duration</th><th>Plan ID</th><th>Active</th><th>Actions</th></tr>'
       + (rows || '<tr><td colspan="9"><div class="empty-state"><p>No data plans yet</p></div></td></tr>')
       + '</table></div>'
-      + '<p style="color:#888;font-size:12px;margin-top:12px"><b>Cost</b> = current price from DataStation (amount column). <b>Selling Price</b> = what you charge users. Set your selling price via Edit.</p>';
+      + '<p style="color:#888;font-size:12px;margin-top:12px"><b>Cost</b> = DataStation price. <b>Selling Price</b> = what you charge users. Set via Edit.</p>';
   });
+}
+
+function loadAirtimePricing(tabHtml) {
+  document.getElementById('page-pricing').innerHTML = '<div class="page-header"><h2>Pricing</h2></div>'
+    + tabHtml
+    + '<div class="table-wrap" style="padding:24px">'
+    + '<h3 style="margin-bottom:12px">Airtime Pricing</h3>'
+    + '<p style="color:#555;font-size:14px;line-height:1.7">Airtime profit is <b>automatic</b>. DataStation sells airtime to you at a discount (typically 2-3% below face value).</p>'
+    + '<div style="margin-top:16px">'
+    + '<table style="width:100%"><tr><th>User Pays</th><th>DataStation Charges You (approx)</th><th>Your Profit</th></tr>'
+    + '<tr><td>\u20a6100</td><td>~\u20a697</td><td style="color:#2e7d32;font-weight:bold">~\u20a63</td></tr>'
+    + '<tr><td>\u20a6200</td><td>~\u20a6194</td><td style="color:#2e7d32;font-weight:bold">~\u20a66</td></tr>'
+    + '<tr><td>\u20a6500</td><td>~\u20a6485</td><td style="color:#2e7d32;font-weight:bold">~\u20a615</td></tr>'
+    + '<tr><td>\u20a61,000</td><td>~\u20a6970</td><td style="color:#2e7d32;font-weight:bold">~\u20a630</td></tr>'
+    + '</table></div>'
+    + '<p style="color:#888;font-size:12px;margin-top:16px">The exact discount depends on the network and DataStation\'s current rates. Users pay face value, you keep the difference automatically.</p>'
+    + '</div>';
 }
 
 function createPlanModal() {
