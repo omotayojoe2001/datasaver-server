@@ -16,8 +16,8 @@ app.use(express.json({ limit: '10mb' }));
 // ============================================
 // SUPABASE
 // ============================================
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://fjygdysjdpjafkjkqfad.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZqeWdkeXNqZHBqYWZramtxZmFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MzA4NjgsImV4cCI6MjA5MTQwNjg2OH0.-CDiVLSsuvSMl0IYOrPDD3CKvwttkt_D4WTAMVdb6UM';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // DataStation API config
