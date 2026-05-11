@@ -678,126 +678,120 @@ function doManualTopup() {
 }
 
 // ============ PRICING ============
+var allPlans = [];
 function loadPricing() {
-  const netFilter = document.getElementById('pricingNet') ? document.getElementById('pricingNet').value : '';
-  api('/api/data-plans?network=' + netFilter).then(plans => {
+  var netFilter = document.getElementById('pricingNet') ? document.getElementById('pricingNet').value : '';
+  api('/api/data-plans?network=' + netFilter).then(function(plans) {
     if (!Array.isArray(plans)) plans = [];
     allPlans = plans;
-    let rows = '';
-    plans.forEach(p => {
-      const cost = parseFloat(p.cost_price||0);
-      const sell = parseFloat(p.amount||0);
-      const profit = sell - cost;
-      rows += `<tr>
-        <td>${p.network||'-'}</td>
-        <td>${p.size||'-'}</td>
-        <td>${fmtMoney(cost)}</td>
-        <td>${fmtMoney(sell)}</td>
-        <td style="color:${profit>0?'#2e7d32':'#c62828'};font-weight:bold">${fmtMoney(profit)}</td>
-        <td>${p.duration||'-'}</td>
-        <td>${p.data_id||'-'}</td>
-        <td>${p.active ? '<span style="color:#43A047;font-weight:bold">YES</span>' : '<span style="color:#999">NO</span>'}</td>
-        <td>
-          <button class="btn-sm btn-edit" onclick="editPlan('${p.id}')">Edit</button>
-          <button class="btn-sm ${p.active?'btn-reject':'btn-approve'}" onclick="togglePlan('${p.id}',${!p.active})">${p.active?'Disable':'Enable'}</button>
-          <button class="btn-sm btn-delete" onclick="deletePlan('${p.id}')">Del</button>
-        </td>
-      </tr>`;
-    });
-    document.getElementById('page-pricing').innerHTML = `
-      <div class="page-header"><h2>Airtime & Data Pricing (${plans.length})</h2><button class="btn" onclick="createPlanModal()">+ Add Plan</button></div>
-      <div class="filters">
-        <select id="pricingNet" onchange="loadPricing()">
-          <option value="">All Networks</option>
-          <option value="MTN" ${netFilter==='MTN'?'selected':''}>MTN</option>
-          <option value="GLO" ${netFilter==='GLO'?'selected':''}>GLO</option>
-          <option value="AIRTEL" ${netFilter==='AIRTEL'?'selected':''}>AIRTEL</option>
-          <option value="9MOBILE" ${netFilter==='9MOBILE'?'selected':''}>9MOBILE</option>
-        </select>
-      </div>
-      <div class="table-wrap"><table>
-        <tr><th>Network</th><th>Size</th><th>Cost (DataStation)</th><th>Selling Price</th><th>Profit</th><th>Duration</th><th>Plan ID</th><th>Active</th><th>Actions</th></tr>
-        ${rows || '<tr><td colspan="9"><div class="empty-state"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg><p>No data plans yet — click "+ Add Plan" to create one</p></div></td></tr>'}
-      </table></div>
-      <p style="color:#888;font-size:12px;margin-top:12px"><b>Cost</b> = what DataStation charges you. <b>Selling Price</b> = what users pay. <b>Profit</b> = your margin per sale.</p>
-    `;
+    var rows = '';
+    for (var i = 0; i < plans.length; i++) {
+      var p = plans[i];
+      var cost = parseFloat(p.amount||0);
+      var sell = parseFloat(p.selling_price||0);
+      var profit = sell - cost;
+      var profitColor = profit > 0 ? '#2e7d32' : '#c62828';
+      var sellDisplay = sell > 0 ? fmtMoney(sell) : '<span style="color:#e65100">NOT SET</span>';
+      rows += '<tr>';
+      rows += '<td>' + (p.network||'-') + '</td>';
+      rows += '<td>' + (p.size||'-') + '</td>';
+      rows += '<td>' + fmtMoney(cost) + '</td>';
+      rows += '<td>' + sellDisplay + '</td>';
+      rows += '<td style="color:' + profitColor + ';font-weight:bold">' + (sell > 0 ? fmtMoney(profit) : '-') + '</td>';
+      rows += '<td>' + (p.duration||'-') + '</td>';
+      rows += '<td>' + (p.data_id||'-') + '</td>';
+      rows += '<td>' + (p.active ? '<span style="color:#43A047;font-weight:bold">YES</span>' : '<span style="color:#999">NO</span>') + '</td>';
+      rows += '<td>';
+      rows += '<button class="btn-sm btn-edit" onclick="editPlan(' + i + ')">Edit</button> ';
+      rows += '<button class="btn-sm ' + (p.active?'btn-reject':'btn-approve') + '" onclick="togglePlan(' + i + ')">' + (p.active?'Disable':'Enable') + '</button> ';
+      rows += '<button class="btn-sm btn-delete" onclick="deletePlan(' + i + ')">Del</button>';
+      rows += '</td></tr>';
+    }
+    document.getElementById('page-pricing').innerHTML = '<div class="page-header"><h2>Airtime & Data Pricing (' + plans.length + ')</h2><button class="btn" onclick="createPlanModal()">+ Add Plan</button></div>'
+      + '<div class="filters"><select id="pricingNet" onchange="loadPricing()">'
+      + '<option value="">All Networks</option>'
+      + '<option value="MTN"' + (netFilter==='MTN'?' selected':'') + '>MTN</option>'
+      + '<option value="GLO"' + (netFilter==='GLO'?' selected':'') + '>GLO</option>'
+      + '<option value="AIRTEL"' + (netFilter==='AIRTEL'?' selected':'') + '>AIRTEL</option>'
+      + '<option value="9MOBILE"' + (netFilter==='9MOBILE'?' selected':'') + '>9MOBILE</option>'
+      + '</select></div>'
+      + '<div class="table-wrap"><table>'
+      + '<tr><th>Network</th><th>Size</th><th>Cost (DataStation)</th><th>Your Selling Price</th><th>Profit</th><th>Duration</th><th>Plan ID</th><th>Active</th><th>Actions</th></tr>'
+      + (rows || '<tr><td colspan="9"><div class="empty-state"><p>No data plans yet</p></div></td></tr>')
+      + '</table></div>'
+      + '<p style="color:#888;font-size:12px;margin-top:12px"><b>Cost</b> = current price from DataStation (amount column). <b>Selling Price</b> = what you charge users. Set your selling price via Edit.</p>';
   });
 }
 
 function createPlanModal() {
-  showModal(`
-    <h3>Add Data Plan</h3>
-    <label>Network</label>
-    <select id="planNetwork"><option value="MTN">MTN</option><option value="GLO">GLO</option><option value="AIRTEL">AIRTEL</option><option value="9MOBILE">9MOBILE</option></select>
-    <label>Size (e.g. 1GB, 500MB)</label><input id="planSize" placeholder="1GB">
-    <label>Cost Price - DataStation (₦)</label><input id="planCost" type="number" placeholder="250">
-    <label>Selling Price - Users Pay (₦)</label><input id="planAmount" type="number" placeholder="300">
-    <label>Duration (e.g. 30 days, 7 days)</label><input id="planDuration" placeholder="30 days">
-    <label>DataStation Plan ID</label><input id="planDataId" placeholder="e.g. 1 or 25">
-    <div class="modal-actions">
-      <button class="btn-cancel" onclick="hideModal()">Cancel</button>
-      <button class="btn-save" onclick="saveNewPlan()">Add Plan</button>
-    </div>
-  `);
+  showModal('<h3>Add Data Plan</h3>'
+    + '<label>Network</label><select id="planNetwork"><option value="MTN">MTN</option><option value="GLO">GLO</option><option value="AIRTEL">AIRTEL</option><option value="9MOBILE">9MOBILE</option></select>'
+    + '<label>Size (e.g. 1GB, 500MB)</label><input id="planSize" placeholder="1GB">'
+    + '<label>Cost Price - DataStation (\u20a6)</label><input id="planCost" type="number" placeholder="250">'
+    + '<label>Your Selling Price (\u20a6)</label><input id="planSell" type="number" placeholder="300">'
+    + '<label>Duration (e.g. 30 days)</label><input id="planDuration" placeholder="30 days">'
+    + '<label>DataStation Plan ID</label><input id="planDataId" placeholder="e.g. 1 or 25">'
+    + '<div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-save" onclick="saveNewPlan()">Add Plan</button></div>'
+  );
 }
 
 function saveNewPlan() {
-  const body = {
+  var body = {
     network: document.getElementById('planNetwork').value,
     size: document.getElementById('planSize').value,
-    cost_price: parseFloat(document.getElementById('planCost').value) || 0,
-    amount: parseFloat(document.getElementById('planAmount').value) || 0,
+    amount: parseFloat(document.getElementById('planCost').value) || 0,
+    selling_price: parseFloat(document.getElementById('planSell').value) || 0,
     duration: document.getElementById('planDuration').value,
     data_id: document.getElementById('planDataId').value,
     active: true
   };
-  if (!body.size || !body.amount) { alert('Size and selling price required'); return; }
+  if (!body.size || !body.amount) { alert('Size and cost price required'); return; }
   api('/api/data-plans', { method: 'POST', body: JSON.stringify(body) })
-    .then(r => { if (r.success) { hideModal(); loadPricing(); } else alert(r.error||'Failed'); });
+    .then(function(r) { if (r.success) { hideModal(); loadPricing(); } else alert(r.error||'Failed'); });
 }
 
-let allPlans = [];
-function editPlan(id) {
-  const p = allPlans.find(x => x.id === id);
+function editPlan(idx) {
+  var p = allPlans[idx];
   if (!p) return;
-  showModal(`
-    <h3>Edit Data Plan</h3>
-    <label>Network</label>
-    <select id="planNetwork"><option value="MTN" ${p.network==='MTN'?'selected':''}>MTN</option><option value="GLO" ${p.network==='GLO'?'selected':''}>GLO</option><option value="AIRTEL" ${p.network==='AIRTEL'?'selected':''}>AIRTEL</option><option value="9MOBILE" ${p.network==='9MOBILE'?'selected':''}>9MOBILE</option></select>
-    <label>Size</label><input id="planSize" value="${p.size||''}">
-    <label>Cost Price - DataStation (₦)</label><input id="planCost" type="number" value="${p.cost_price||0}">
-    <label>Selling Price - Users Pay (₦)</label><input id="planAmount" type="number" value="${p.amount||0}">
-    <label>Duration</label><input id="planDuration" value="${p.duration||''}">
-    <label>DataStation Plan ID</label><input id="planDataId" value="${p.data_id||''}">
-    <div class="modal-actions">
-      <button class="btn-cancel" onclick="hideModal()">Cancel</button>
-      <button class="btn-save" onclick="updatePlan('${id}')">Save</button>
-    </div>
-  `);
+  showModal('<h3>Edit Data Plan</h3>'
+    + '<label>Network</label><select id="planNetwork"><option value="MTN"' + (p.network==='MTN'?' selected':'') + '>MTN</option><option value="GLO"' + (p.network==='GLO'?' selected':'') + '>GLO</option><option value="AIRTEL"' + (p.network==='AIRTEL'?' selected':'') + '>AIRTEL</option><option value="9MOBILE"' + (p.network==='9MOBILE'?' selected':'') + '>9MOBILE</option></select>'
+    + '<label>Size</label><input id="planSize" value="' + (p.size||'') + '">'
+    + '<label>Cost Price - DataStation (\u20a6)</label><input id="planCost" type="number" value="' + (p.amount||0) + '">'
+    + '<label>Your Selling Price (\u20a6)</label><input id="planSell" type="number" value="' + (p.selling_price||0) + '">'
+    + '<label>Duration</label><input id="planDuration" value="' + (p.duration||'') + '">'
+    + '<label>DataStation Plan ID</label><input id="planDataId" value="' + (p.data_id||'') + '">'
+    + '<div class="modal-actions"><button class="btn-cancel" onclick="hideModal()">Cancel</button><button class="btn-save" onclick="updatePlan(' + idx + ')">Save</button></div>'
+  );
 }
 
-function updatePlan(id) {
-  const body = {
+function updatePlan(idx) {
+  var p = allPlans[idx];
+  if (!p) return;
+  var body = {
     network: document.getElementById('planNetwork').value,
     size: document.getElementById('planSize').value,
-    cost_price: parseFloat(document.getElementById('planCost').value) || 0,
-    amount: parseFloat(document.getElementById('planAmount').value) || 0,
+    amount: parseFloat(document.getElementById('planCost').value) || 0,
+    selling_price: parseFloat(document.getElementById('planSell').value) || 0,
     duration: document.getElementById('planDuration').value,
     data_id: document.getElementById('planDataId').value
   };
-  api('/api/data-plans/' + id, { method: 'POST', body: JSON.stringify(body) })
-    .then(r => { if (r.success) { hideModal(); loadPricing(); } else alert(r.error||'Failed'); });
+  api('/api/data-plans/' + p.id, { method: 'POST', body: JSON.stringify(body) })
+    .then(function(r) { if (r.success) { hideModal(); loadPricing(); } else alert(r.error||'Failed'); });
 }
 
-function togglePlan(id, active) {
-  api('/api/data-plans/' + id, { method: 'POST', body: JSON.stringify({ active }) })
-    .then(r => { if (r.success) loadPricing(); else alert(r.error||'Failed'); });
+function togglePlan(idx) {
+  var p = allPlans[idx];
+  if (!p) return;
+  api('/api/data-plans/' + p.id, { method: 'POST', body: JSON.stringify({ active: !p.active }) })
+    .then(function(r) { if (r.success) loadPricing(); else alert(r.error||'Failed'); });
 }
 
-function deletePlan(id) {
+function deletePlan(idx) {
+  var p = allPlans[idx];
+  if (!p) return;
   if (!confirm('Delete this data plan?')) return;
-  api('/api/data-plans/' + id + '/delete', { method: 'POST' })
-    .then(r => { if (r.success) loadPricing(); else alert(r.error||'Failed'); });
+  api('/api/data-plans/' + p.id + '/delete', { method: 'POST' })
+    .then(function(r) { if (r.success) loadPricing(); else alert(r.error||'Failed'); });
 }
 
 // ============ SETTINGS ============

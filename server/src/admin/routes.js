@@ -313,8 +313,8 @@ module.exports = function(supabase) {
 
   router.post('/api/data-plans', auth, async (req, res) => {
     try {
-      const { network, size, amount, duration, data_id, active } = req.body;
-      const { error } = await supabase.from('data_plans').insert({ network, size, amount, duration, data_id, active: active !== false });
+      const { network, size, amount, selling_price, duration, data_id, active } = req.body;
+      const { error } = await supabase.from('data_plans').insert({ network, size, amount, selling_price: selling_price || 0, duration, data_id, active: active !== false });
       if (error) return res.status(500).json({ error: error.message });
       res.json({ success: true });
     } catch (e) {

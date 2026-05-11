@@ -264,8 +264,8 @@ app.post('/api/buy-data', async (req, res) => {
     }
 
     // Check wallet balance
-    if (walletBal < parseFloat(plan.amount)) {
-      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + walletBal.toFixed(0) + ' but need \u20a6' + plan.amount });
+    if (walletBal < parseFloat(plan.selling_price || plan.amount)) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + walletBal.toFixed(0) + ' but need \u20a6' + (plan.selling_price || plan.amount) });
     }
 
     // Create pending transaction
@@ -275,8 +275,7 @@ app.post('/api/buy-data', async (req, res) => {
         type: 'data',
         network: plan.network,
         phone,
-        amount: plan.amount,
-        data_plan_id: plan.data_id,
+        amount: plan.selling_price || plan.amount,
         plan_size: plan.size,
         status: 'pending'
       })
@@ -300,15 +299,16 @@ app.post('/api/buy-data', async (req, res) => {
       });
 
       // Debit wallet
-      await supabase.from('users').update({ wallet_balance: walletBal - parseFloat(plan.amount) }).eq('id', userId);
-      await supabase.from('wallet_transactions').insert({ user_id: userId, type: 'debit', amount: parseFloat(plan.amount), description: plan.size + ' ' + plan.network + ' data' });
+      const chargeAmount = parseFloat(plan.selling_price || plan.amount);
+      await supabase.from('users').update({ wallet_balance: walletBal - chargeAmount }).eq('id', userId);
+      await supabase.from('wallet_transactions').insert({ user_id: userId, type: 'debit', amount: chargeAmount, description: plan.size + ' ' + plan.network + ' data' });
 
       // Update transaction
       await supabase.from('transactions')
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
-      res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(plan.amount) });
+      res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - chargeAmount });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
       await supabase.from('transactions')
