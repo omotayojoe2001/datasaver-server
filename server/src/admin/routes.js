@@ -327,7 +327,9 @@ module.exports = function(supabase) {
       const updates = req.body;
       delete updates.id;
       delete updates.duration;
-      const { error } = await supabase.from('data_plans').update(updates).eq('id', req.params.id);
+      console.log('[PRICING UPDATE] id:', req.params.id, 'body:', JSON.stringify(updates));
+      const { data, error } = await supabase.from('data_plans').update(updates).eq('id', req.params.id).select();
+      console.log('[PRICING UPDATE] result:', JSON.stringify(data), 'error:', error);
       if (error) return res.status(500).json({ error: error.message });
       res.json({ success: true });
     } catch (e) {
