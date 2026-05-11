@@ -196,7 +196,10 @@ function loadPage(page) {
 
 function api(path, opts = {}) {
   opts.headers = { ...opts.headers, 'x-admin-password': ADMIN_PW, 'Content-Type': 'application/json' };
-  return fetch(API + '/admin' + path, opts).then(r => r.json()).catch(() => ({}));
+  return fetch(API + '/admin' + path, opts).then(function(r) {
+    if (!r.ok) return r.text().then(function(t) { try { return JSON.parse(t); } catch(e) { return {error: 'HTTP ' + r.status + ': ' + t}; } });
+    return r.json();
+  }).catch(function(e) { alert('Network error: ' + e.message); return {}; });
 }
 
 function showModal(html) {
@@ -792,21 +795,25 @@ function updatePlan(idx) {
   var p = allPlans[idx];
   if (!p) return;
   var body = {
-    network: document.getElementById('planNetwork').value,
-    size: document.getElementById('planSize').value,
-    amount: parseFloat(document.getElementById('planCost').value) || 0,
-    selling_price: parseFloat(document.getElementById('planSell').value) || 0,
-    data_id: document.getElementById('planDataId').value
+    selling_price: parseFloat(document.getElementById('planSell').value) || 0
   };
+  var net = document.getElementById('planNetwork').value;
+  var size = document.getElementById('planSize').value;
+  var cost = parseFloat(document.getElementById('planCost').value) || 0;
+  var dataId = document.getElementById('planDataId').value;
+  if (net !== p.network) body.network = net;
+  if (size !== p.size) body.size = size;
+  if (cost !== parseFloat(p.amount||0)) body.amount = cost;
+  if (dataId !== String(p.data_id||'')) body.data_id = dataId;
   api('/api/data-plans/' + p.id, { method: 'POST', body: JSON.stringify(body) })
-    .then(function(r) { if (r.success) { hideModal(); loadPricing(); } else alert(r.error||'Failed'); });
+    .then(function(r) { if (r.success) { hideModal(); loadPricing(); alert('Updated!'); } else alert('Error: ' + (r.error||'Failed')); });
 }
 
 function togglePlan(idx) {
   var p = allPlans[idx];
   if (!p) return;
   api('/api/data-plans/' + p.id, { method: 'POST', body: JSON.stringify({ active: !p.active }) })
-    .then(function(r) { if (r.success) loadPricing(); else alert(r.error||'Failed'); });
+    .then(function(r) { if (r.success) loadPricing(); else alert('Error: ' + (r.error||'Failed')); });
 }
 
 function deletePlan(idx) {
