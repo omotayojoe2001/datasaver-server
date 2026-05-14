@@ -873,6 +873,14 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
+app.get('/debug-env', (req, res) => {
+  res.json({
+    DATASTATION_URL: process.env.DATASTATION_URL || 'NOT SET',
+    DATASTATION_TOKEN: process.env.DATASTATION_TOKEN ? 'SET' : 'NOT SET',
+    NODE_ENV: process.env.NODE_ENV
+  });
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`DataSaver server running on port ${PORT}`);
   console.log(`API: http://localhost:${PORT}/api/plans`);
