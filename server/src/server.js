@@ -21,7 +21,7 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // DataStation API config
-const DATASTATION_URL = process.env.DATASTATION_URL;
+const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
 const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN;
 
 // Paystack config
@@ -878,4 +878,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`API: http://localhost:${PORT}/api/plans`);
   console.log(`Proxy: http://localhost:${PORT}/proxy?url=https://example.com`);
 });
+
 
