@@ -1,0 +1,1877 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F0F4F8">
+
+    <!-- Bottom Navigation -->
+    <LinearLayout
+        android:id="@+id/bottomNav"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_alignParentBottom="true"
+        android:orientation="horizontal"
+        android:background="#FFFFFF"
+        android:elevation="8dp">
+
+        <TextView
+            android:id="@+id/navHome"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Home"
+            android:textSize="11sp"
+            android:textColor="#1565C0"
+            android:textStyle="bold"
+            android:drawableTop="@android:drawable/ic_menu_compass"
+            android:drawablePadding="2dp"
+            android:paddingTop="6dp" />
+
+        <TextView
+            android:id="@+id/navAirtime"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Airtime"
+            android:textSize="11sp"
+            android:textColor="#999999"
+            android:drawableTop="@android:drawable/ic_menu_call"
+            android:drawablePadding="2dp"
+            android:paddingTop="6dp" />
+
+        <TextView
+            android:id="@+id/navData"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Plans"
+            android:textSize="11sp"
+            android:textColor="#999999"
+            android:drawableTop="@android:drawable/ic_menu_upload"
+            android:drawablePadding="2dp"
+            android:paddingTop="6dp" />
+
+        <TextView
+            android:id="@+id/navTransactions"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="History"
+            android:textSize="11sp"
+            android:textColor="#999999"
+            android:drawableTop="@android:drawable/ic_menu_recent_history"
+            android:drawablePadding="2dp"
+            android:paddingTop="6dp" />
+
+        <TextView
+            android:id="@+id/navEarn"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Earn"
+            android:textSize="11sp"
+            android:textColor="#999999"
+            android:drawableTop="@android:drawable/ic_menu_agenda"
+            android:drawablePadding="2dp"
+            android:paddingTop="6dp" />
+
+        <TextView
+            android:id="@+id/navProfile"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Profile"
+            android:textSize="11sp"
+            android:textColor="#999999"
+            android:drawableTop="@android:drawable/ic_menu_myplaces"
+            android:drawablePadding="2dp"
+            android:paddingTop="6dp" />
+    </LinearLayout>
+
+    <!-- HOME TAB -->
+    <ScrollView
+        android:id="@+id/contentArea"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_above="@id/bottomNav">
+
+        <LinearLayout
+            android:id="@+id/tabHome"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Top Header -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#1565C0"
+                android:orientation="vertical"
+                android:padding="20dp"
+                android:gravity="center_horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DataSaver"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- Power Button -->
+                <Button
+                    android:id="@+id/btnConnect"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
+                    android:text="OFF"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="@drawable/circle_off"
+                    android:layout_marginBottom="12dp" />
+
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Tap to connect"
+                    android:textSize="14sp"
+                    android:textColor="#B3FFFFFF" />
+
+                <!-- Wallet Balance -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:background="#0D47A1"
+                    android:padding="10dp"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="12dp">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Wallet Balance"
+                        android:textSize="13sp"
+                        android:textColor="#B3FFFFFF" />
+                    <TextView
+                        android:id="@+id/tvWalletBalance"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Loading..."
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF" />
+                    <TextView
+                        android:id="@+id/btnAddFunds"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="+ Add Funds"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF"
+                        android:background="#43A047"
+                        android:paddingLeft="10dp"
+                        android:paddingRight="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingBottom="4dp"
+                        android:layout_marginLeft="8dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Data Summary Card -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#FFFFFF"
+                android:padding="16dp"
+                android:layout_marginLeft="12dp"
+                android:layout_marginRight="12dp"
+                android:layout_marginTop="-20dp"
+                android:elevation="4dp">
+
+                <!-- Savings Card: Data Saved / Money Saved / Would Have Spent -->
+                <!-- Real Savings -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginBottom="12dp"
+                    android:background="@drawable/card_green"
+                    android:padding="12dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Real Savings"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20"
+                        android:layout_marginBottom="8dp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:gravity="center">
+                            <TextView
+                                android:id="@+id/tvRealAdsBlocked"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:textColor="#1B5E20" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Blocked"
+                                android:textSize="10sp"
+                                android:textColor="#555555" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:gravity="center">
+                            <TextView
+                                android:id="@+id/tvRealDataSaved"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="0 KB"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:textColor="#43A047" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Data Saved"
+                                android:textSize="10sp"
+                                android:textColor="#555555" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:gravity="center">
+                            <TextView
+                                android:id="@+id/tvRealMoneySaved"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="N0"
+                                android:textSize="20sp"
+                                android:textStyle="bold"
+                                android:textColor="#E65100" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Money Saved"
+                                android:textSize="10sp"
+                                android:textColor="#555555" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvSummaryLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Data Summary (Today)"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#1565C0"
+                    android:layout_marginBottom="12dp" />
+
+                <!-- Stats Row -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="12dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:gravity="center">
+
+                        <TextView
+                            android:id="@+id/tvUsed"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0 B"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="#D32F2F" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="You Used"
+                            android:textSize="11sp"
+                            android:textColor="#888888" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:gravity="center">
+
+                        <TextView
+                            android:id="@+id/tvSaved"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0 B"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="#1B5E20" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="We Saved"
+                            android:textSize="11sp"
+                            android:textColor="#888888" />
+
+                        <TextView
+                            android:id="@+id/tvSavedValue"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Worth \u20a60"
+                            android:textSize="10sp"
+                            android:textStyle="bold"
+                            android:textColor="#43A047" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:gravity="center">
+
+                        <TextView
+                            android:id="@+id/tvSavedPct"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0%"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="#1565C0" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Efficiency"
+                            android:textSize="11sp"
+                            android:textColor="#888888" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Graph Bar: Used vs Saved -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="24dp"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="4dp">
+
+                    <View
+                        android:id="@+id/barUsed"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="97"
+                        android:background="#D32F2F" />
+
+                    <View
+                        android:id="@+id/barSaved"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="3"
+                        android:background="#43A047" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <View
+                        android:layout_width="12dp"
+                        android:layout_height="12dp"
+                        android:background="#D32F2F" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text=" Data Used   "
+                        android:textSize="10sp"
+                        android:textColor="#888888" />
+                    <View
+                        android:layout_width="12dp"
+                        android:layout_height="12dp"
+                        android:background="#43A047" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text=" Data Saved"
+                        android:textSize="10sp"
+                        android:textColor="#888888" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Tips Section -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#FFFFFF"
+                android:padding="14dp"
+                android:layout_marginLeft="12dp"
+                android:layout_marginRight="12dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="4dp"
+                android:elevation="2dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="\ud83d\udca1 Tips to Save More Data"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:textColor="#1565C0"
+                    android:layout_marginBottom="6dp" />
+
+                <TextView
+                    android:id="@+id/tvTip"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Loading tip..."
+                    android:textSize="13sp"
+                    android:textColor="#444444"
+                    android:lineSpacingExtra="3dp" />
+
+                <TextView
+                    android:id="@+id/btnNextTip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Next tip \u2192"
+                    android:textSize="12sp"
+                    android:textColor="#1565C0"
+                    android:textStyle="bold"
+                    android:padding="6dp"
+                    android:layout_gravity="end"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Protected Apps shortcut -->
+            <LinearLayout
+                android:id="@+id/btnProtectedApps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:background="@drawable/card_bg"
+                android:padding="14dp"
+                android:layout_marginLeft="12dp"
+                android:layout_marginRight="12dp"
+                android:layout_marginBottom="8dp"
+                android:elevation="3dp"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Protected Apps"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#1565C0" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Choose apps that should never be interrupted >"
+                    android:textSize="11sp"
+                    android:textColor="#888888" />
+            </LinearLayout>
+
+            <!-- App Data Usage Header -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingLeft="16dp"
+                android:paddingRight="16dp"
+                android:paddingTop="16dp"
+                android:paddingBottom="4dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="App Data Usage"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:textColor="#333333" />
+                    <TextView
+                        android:id="@+id/btnViewAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="View All >"
+                        android:textSize="13sp"
+                        android:textColor="#1565C0" />
+                </LinearLayout>
+
+                <!-- Time Filters -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="32dp"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+                    <TextView
+                        android:id="@+id/filterToday"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:text="Today"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF"
+                        android:background="#1565C0"
+                        android:layout_marginRight="4dp" />
+                    <TextView
+                        android:id="@+id/filterWeek"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:text="This Week"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#666666"
+                        android:background="#E0E0E0"
+                        android:layout_marginRight="4dp" />
+                    <TextView
+                        android:id="@+id/filterMonth"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:gravity="center"
+                        android:text="This Month"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#666666"
+                        android:background="#E0E0E0" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- App Usage List (populated dynamically) -->
+            <LinearLayout
+                android:id="@+id/appUsageContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingLeft="12dp"
+                android:paddingRight="12dp"
+                android:paddingBottom="16dp" />
+
+            <TextView
+                android:id="@+id/tvAppUsageEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Loading app data usage..."
+                android:textSize="13sp"
+                android:textColor="#999999"
+                android:gravity="center"
+                android:padding="24dp" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- AIRTIME/DATA TAB (hidden) -->
+<ScrollView
+    android:id="@+id/tabAirtime"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_above="@id/bottomNav"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1565C0"
+            android:padding="20dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Buy Airtime &amp; Data"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Instant top-up for all networks"
+                android:textSize="13sp"
+                android:textColor="#B3FFFFFF"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- Phone Number -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Phone Number"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/etPhone"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter phone number"
+                android:inputType="phone"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <!-- Network Selection -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Select Network"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="8dp" />
+            <LinearLayout
+                android:id="@+id/networkRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+                <TextView
+                    android:id="@+id/btnMTN"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="MTN"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="#F9A825"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/btnAirtel"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Airtel"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="#D32F2F"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/btnGlo"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Glo"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="#388E3C"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/btn9mobile"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="9mobile"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="#00695C" />
+            </LinearLayout>
+
+            <!-- Airtime / Data Toggle -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="What do you want to buy?"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="8dp" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:orientation="horizontal"
+                android:background="#E0E0E0"
+                android:padding="3dp"
+                android:layout_marginBottom="16dp">
+                <TextView
+                    android:id="@+id/toggleAirtime"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Airtime"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="#1565C0" />
+                <TextView
+                    android:id="@+id/toggleData"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Data"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#666666"
+                    android:background="#00000000" />
+            </LinearLayout>
+
+            <!-- Airtime Section (shown when Airtime selected) -->
+            <LinearLayout
+                android:id="@+id/airtimeSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Select Amount"
+                    android:textSize="13sp"
+                    android:textColor="#666666"
+                    android:layout_marginBottom="8dp" />
+                <LinearLayout
+                    android:id="@+id/airtimeRow1"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+                    <TextView android:id="@+id/air100" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦100" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" android:layout_marginRight="6dp" />
+                    <TextView android:id="@+id/air200" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦200" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" android:layout_marginRight="6dp" />
+                    <TextView android:id="@+id/air500" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦500" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" android:layout_marginRight="6dp" />
+                    <TextView android:id="@+id/air1000" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦1000" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" />
+                </LinearLayout>
+                <LinearLayout
+                    android:id="@+id/airtimeRow2"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="8dp">
+                    <TextView android:id="@+id/air2000" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦2000" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" android:layout_marginRight="6dp" />
+                    <TextView android:id="@+id/air3000" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦3000" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" android:layout_marginRight="6dp" />
+                    <TextView android:id="@+id/air5000" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦5000" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" android:layout_marginRight="6dp" />
+                    <TextView android:id="@+id/air10000" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1" android:gravity="center" android:text="₦10000" android:textSize="14sp" android:textStyle="bold" android:textColor="#1565C0" android:background="#FFFFFF" />
+                </LinearLayout>
+
+                <!-- Custom amount -->
+                <EditText
+                    android:id="@+id/etAirtimeAmount"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:hint="Or enter custom amount"
+                    android:inputType="number"
+                    android:background="#FFFFFF"
+                    android:padding="12dp"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
+            <!-- Data Section (hidden by default) -->
+            <LinearLayout
+                android:id="@+id/dataSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Select Data Plan"
+                    android:textSize="13sp"
+                    android:textColor="#666666"
+                    android:layout_marginBottom="8dp" />
+
+                <!-- Data plans loaded dynamically -->
+                <LinearLayout
+                    android:id="@+id/dataPlansContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+
+                <TextView
+                    android:id="@+id/tvSelectNetwork"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Please select a network above"
+                    android:textSize="13sp"
+                    android:textColor="#999999"
+                    android:gravity="center"
+                    android:padding="20dp" />
+            </LinearLayout>
+
+            <!-- BUY Button -->
+            <Button
+                android:id="@+id/btnBuy"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:text="BUY AIRTIME"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/btn_rounded"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="16dp" />
+
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
+
+
+    <!-- DATA PLANS TAB (hidden) -->
+<ScrollView
+    android:id="@+id/tabData"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_above="@id/bottomNav"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1565C0"
+            android:padding="20dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Data Saving Plans"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+            <TextView
+                android:id="@+id/tvCurrentPlanHeader"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Current Plan: Basic (Free)"
+                android:textSize="13sp"
+                android:textColor="#B3FFFFFF"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/subsPlansContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp" />
+
+    </LinearLayout>
+</ScrollView>
+
+
+    <!-- HISTORY TAB (hidden) -->
+<ScrollView
+    android:id="@+id/tabTransactions"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_above="@id/bottomNav"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1565C0"
+            android:padding="20dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="History"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+            <TextView
+                android:id="@+id/btnRefreshHistory"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Refresh"
+                android:textSize="13sp"
+                android:textColor="#B3FFFFFF"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <!-- Sub-tabs: Data Usage | Transactions -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:background="#E0E0E0"
+            android:padding="3dp"
+            android:layout_marginLeft="16dp"
+            android:layout_marginRight="16dp"
+            android:layout_marginTop="12dp">
+            <TextView
+                android:id="@+id/histTabUsage"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Data Usage"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#1565C0" />
+            <TextView
+                android:id="@+id/histTabTxn"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Transactions"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#666666"
+                android:background="#00000000" />
+            <TextView
+                android:id="@+id/histTabSavings"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Savings"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:textColor="#666666"
+                android:background="#00000000" />
+        </LinearLayout>
+
+        <!-- Data Usage Section -->
+        <LinearLayout
+            android:id="@+id/histUsageSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="12dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="App Data Usage" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" />
+                <TextView android:id="@+id/btnSeeAllUsage" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="See All >" android:textSize="13sp" android:textColor="#1565C0" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/usageHistoryContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="20dp" />
+
+            <!-- Savings Summary -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Savings Summary" android:textSize="16sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="12dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="@drawable/card_green" android:padding="14dp" android:layout_marginBottom="8dp" android:elevation="2dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Total Data Saved" android:textSize="13sp" android:textColor="#555555" />
+                <TextView android:id="@+id/tvHistorySaved" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0 B" android:textSize="28sp" android:textStyle="bold" android:textColor="#1B5E20" android:layout_marginTop="4dp" />
+                <TextView android:id="@+id/tvHistorySavedPct" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="You saved 0% of your data" android:textSize="12sp" android:textColor="#43A047" android:layout_marginTop="4dp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Transaction Section (hidden by default) -->
+        <LinearLayout
+            android:id="@+id/histTxnSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <!-- Transaction date filters -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="12dp">
+                <TextView
+                    android:id="@+id/txnFilterAll"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="All"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:background="@drawable/pill_active"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/txnFilterToday"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Today"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#666666"
+                    android:background="@drawable/pill_bg"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/txnFilterWeek"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="This Week"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#666666"
+                    android:background="@drawable/pill_bg"
+                    android:layout_marginRight="4dp" />
+                <TextView
+                    android:id="@+id/txnFilterMonth"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="This Month"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#666666"
+                    android:background="@drawable/pill_bg" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/txnHistoryContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="20dp" />
+
+            <TextView
+                android:id="@+id/tvNoTxn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="No transactions yet"
+                android:textSize="13sp"
+                android:textColor="#999999"
+                android:gravity="center"
+                android:padding="16dp" />
+        </LinearLayout>
+
+        <!-- Savings Section -->
+        <LinearLayout
+            android:id="@+id/histSavingsSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <!-- Period totals -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:background="@drawable/card_green"
+                    android:padding="12dp"
+                    android:layout_marginRight="6dp">
+                    <TextView
+                        android:id="@+id/tvSavingsToday"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Today"
+                        android:textSize="11sp"
+                        android:textColor="#555555" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:background="@drawable/card_green"
+                    android:padding="12dp"
+                    android:layout_marginRight="6dp">
+                    <TextView
+                        android:id="@+id/tvSavingsWeek"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="This Week"
+                        android:textSize="11sp"
+                        android:textColor="#555555" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:background="@drawable/card_green"
+                    android:padding="12dp">
+                    <TextView
+                        android:id="@+id/tvSavingsMonth"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="16sp"
+                        android:textStyle="bold"
+                        android:textColor="#1B5E20" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="This Month"
+                        android:textSize="11sp"
+                        android:textColor="#555555" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- All time -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/card_bg"
+                android:padding="16dp"
+                android:elevation="3dp"
+                android:layout_marginBottom="16dp">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="All Time"
+                    android:textSize="13sp"
+                    android:textColor="#999999" />
+                <TextView
+                    android:id="@+id/tvSavingsAllTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0 B"
+                    android:textSize="28sp"
+                    android:textStyle="bold"
+                    android:textColor="#1B5E20"
+                    android:layout_marginTop="4dp" />
+                <TextView
+                    android:id="@+id/tvSavingsAllTimeBlocked"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0 requests blocked"
+                    android:textSize="12sp"
+                    android:textColor="#43A047"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Daily history list -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Daily Breakdown"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#333333"
+                android:layout_marginBottom="8dp" />
+
+            <LinearLayout
+                android:id="@+id/savingsHistoryContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/tvNoSavings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="No savings data yet. Turn on DataSaver to start saving."
+                android:textSize="13sp"
+                android:textColor="#999999"
+                android:gravity="center"
+                android:padding="16dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>
+
+
+<!-- EARN TAB (hidden) -->
+<ScrollView
+    android:id="@+id/tabEarn"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_above="@id/bottomNav"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1565C0"
+            android:padding="20dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Tasks &amp; Earn"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Complete tasks to earn free airtime &amp; data"
+                android:textSize="13sp"
+                android:textColor="#B3FFFFFF"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <!-- Pending Rewards Banner -->
+        <LinearLayout
+            android:id="@+id/earnRewardsBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="@drawable/card_green"
+            android:padding="14dp"
+            android:layout_marginLeft="12dp"
+            android:layout_marginRight="12dp"
+            android:layout_marginTop="12dp"
+            android:gravity="center_vertical">
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Your Rewards"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="#1B5E20" />
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="4dp">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Pending: "
+                        android:textSize="12sp"
+                        android:textColor="#555555" />
+                    <TextView
+                        android:id="@+id/tvEarnPending"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="\u20a60"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#FF8F00" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="   Claimable: "
+                        android:textSize="12sp"
+                        android:textColor="#555555" />
+                    <TextView
+                        android:id="@+id/tvEarnClaimable"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="\u20a60"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#43A047" />
+                </LinearLayout>
+            </LinearLayout>
+            <TextView
+                android:id="@+id/btnClaimRewards"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="CLAIM"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#43A047"
+                android:paddingLeft="14dp"
+                android:paddingRight="14dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp" />
+        </LinearLayout>
+
+        <!-- Tasks List -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp"
+            android:paddingTop="16dp"
+            android:paddingBottom="8dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Available Tasks"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#333333" />
+            <TextView
+                android:id="@+id/btnRefreshTasks"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Refresh"
+                android:textSize="12sp"
+                android:textColor="#1565C0" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/earnTasksContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:id="@+id/tvNoTasks"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Loading tasks..."
+            android:textSize="13sp"
+            android:textColor="#999999"
+            android:gravity="center"
+            android:padding="24dp" />
+
+    </LinearLayout>
+</ScrollView>
+
+<!-- PROFILE TAB (hidden) -->
+<ScrollView
+    android:id="@+id/tabProfile"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:layout_above="@id/bottomNav"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Profile Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1565C0"
+            android:padding="24dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/profilePhoto"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
+                android:gravity="center"
+                android:text="U"
+                android:textSize="28sp"
+                android:textStyle="bold"
+                android:textColor="#1565C0"
+                android:background="@drawable/circle_white"
+                android:layout_marginBottom="10dp" />
+            <TextView
+                android:id="@+id/tvProfileName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DataSaver User"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+            <TextView
+                android:id="@+id/tvProfilePhone"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Basic Plan"
+                android:textSize="13sp"
+                android:textColor="#B3FFFFFF"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- Account Settings -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Account Settings" android:textSize="13sp" android:textColor="#999999" android:layout_marginBottom="8dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:elevation="2dp" android:layout_marginBottom="16dp">
+                <LinearLayout android:id="@+id/rowEditProfile" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Edit Profile" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text=">" android:textSize="16sp" android:textColor="#CCCCCC" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:id="@+id/rowChangePassword" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Change Password" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text=">" android:textSize="16sp" android:textColor="#CCCCCC" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:id="@+id/rowManageSub" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Manage Subscription" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:id="@+id/tvManageSubLabel" android:text="Basic >" android:textSize="13sp" android:textColor="#1565C0" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Wallet -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Wallet" android:textSize="13sp" android:textColor="#999999" android:layout_marginBottom="8dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:elevation="2dp" android:layout_marginBottom="16dp">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="60dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Balance" android:textSize="12sp" android:textColor="#999999" />
+                        <TextView android:id="@+id/tvProfileWallet" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="\u20a60" android:textSize="20sp" android:textStyle="bold" android:textColor="#1B5E20" />
+                    </LinearLayout>
+                    <TextView android:id="@+id/btnProfileAddFunds" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="+ Add Funds" android:textSize="13sp" android:textStyle="bold" android:textColor="#FFFFFF" android:background="#43A047" android:paddingLeft="14dp" android:paddingRight="14dp" android:paddingTop="8dp" android:paddingBottom="8dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Notifications -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Notifications" android:textSize="13sp" android:textColor="#999999" android:layout_marginBottom="8dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:elevation="2dp" android:layout_marginBottom="16dp">
+                <LinearLayout android:id="@+id/rowPushNotif" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Push Notifications" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvPushNotif" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ON" android:textSize="13sp" android:textColor="#43A047" android:textStyle="bold" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:id="@+id/rowDailyAlerts" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Daily Usage Alerts" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvDailyAlerts" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ON" android:textSize="13sp" android:textColor="#43A047" android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Data Saving Preferences -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Data Saving Preferences" android:textSize="13sp" android:textColor="#999999" android:layout_marginBottom="8dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:elevation="2dp" android:layout_marginBottom="16dp">
+                <LinearLayout android:id="@+id/rowBgGuard" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Background Guard" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvBgGuard" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ON" android:textSize="13sp" android:textColor="#43A047" android:textStyle="bold" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:id="@+id/rowBypassApps" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="VPN Bypass Apps" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text=">" android:textSize="16sp" android:textColor="#CCCCCC" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:id="@+id/rowImageQuality" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Image Quality" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvImageQuality" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Medium >" android:textSize="13sp" android:textColor="#1565C0" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:id="@+id/rowWifiCompress" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Compress on WiFi" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvWifiCompress" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="OFF" android:textSize="13sp" android:textColor="#D32F2F" android:textStyle="bold" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Server Address" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvServerAddr" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="*****" android:textSize="13sp" android:textColor="#999999" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- About -->
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="About" android:textSize="13sp" android:textColor="#999999" android:layout_marginBottom="8dp" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:background="#FFFFFF" android:elevation="2dp" android:layout_marginBottom="16dp">
+                <LinearLayout android:id="@+id/rowPrivacy" android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Privacy Policy" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text=">" android:textSize="16sp" android:textColor="#CCCCCC" />
+                </LinearLayout>
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0F0F0" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="50dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="14dp" android:paddingRight="14dp">
+                    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="App Version" android:textSize="15sp" android:textColor="#333333" />
+                    <TextView android:id="@+id/tvAppVersion" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="v1.0.0" android:textSize="13sp" android:textColor="#999999" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Logout -->
+            <Button
+                android:id="@+id/btnLogout"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:text="LOG OUT"
+                android:textSize="14sp"
+                android:textColor="#D32F2F"
+                android:background="#FFFFFF"
+                android:layout_marginBottom="24dp" />
+
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
+
+<!-- LOGIN OVERLAY -->
+<ScrollView
+    android:id="@+id/loginOverlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F0F4F8"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1565C0"
+            android:padding="32dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DataSaver"
+                android:textSize="28sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Save up to 30% of your mobile data"
+                android:textSize="14sp"
+                android:textColor="#B3FFFFFF"
+                android:layout_marginTop="8dp" />
+        </LinearLayout>
+
+        <!-- Login/Signup Toggle -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:background="#E0E0E0"
+            android:padding="3dp"
+            android:layout_marginLeft="24dp"
+            android:layout_marginRight="24dp"
+            android:layout_marginTop="16dp">
+            <TextView
+                android:id="@+id/tabLogin"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Login"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#1565C0" />
+            <TextView
+                android:id="@+id/tabSignup"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="Sign Up"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#666666"
+                android:background="#00000000" />
+        </LinearLayout>
+
+        <!-- LOGIN FORM -->
+        <LinearLayout
+            android:id="@+id/loginForm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="24dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Email or Phone Number"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/loginIdentity"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your email or phone"
+                android:inputType="textEmailAddress"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="PIN"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/loginPinField"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your 4-digit PIN"
+                android:inputType="numberPassword"
+                android:maxLength="4"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/btnDoLogin"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:text="LOGIN"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#1565C0" />
+
+            <TextView
+                android:id="@+id/btnFingerprint"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:gravity="center"
+                android:text="\ud83d\udd13  Login with Fingerprint"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="#1565C0"
+                android:background="#E3F2FD"
+                android:layout_marginTop="10dp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- SIGNUP FORM -->
+        <LinearLayout
+            android:id="@+id/signupForm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="24dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Your Name"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/signupName"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your name"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Email Address *"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/signupEmail"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Enter your email"
+                android:inputType="textEmailAddress"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Phone Number (optional)"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/signupPhone"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="e.g. 08012345678"
+                android:inputType="phone"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Create PIN (4 digits)"
+                android:textSize="13sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp" />
+            <EditText
+                android:id="@+id/signupPin"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="Create a 4-digit PIN"
+                android:inputType="numberPassword"
+                android:maxLength="4"
+                android:background="#FFFFFF"
+                android:padding="12dp"
+                android:textSize="15sp"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/btnDoSignup"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:text="CREATE ACCOUNT"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="#1565C0" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvLoginStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:textSize="13sp"
+            android:textColor="#D32F2F"
+            android:paddingLeft="24dp"
+            android:paddingRight="24dp"
+            android:layout_marginTop="4dp"
+            android:visibility="gone" />
+    </LinearLayout>
+</ScrollView>
+
+<!-- PAYSTACK WEBVIEW OVERLAY -->
+<LinearLayout
+    android:id="@+id/paystackOverlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF"
+    android:visibility="gone">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:paddingLeft="12dp"
+        android:paddingRight="12dp">
+        <TextView
+            android:id="@+id/btnClosePaystack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="X  Close"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF" />
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Secure Payment"
+            android:textSize="15sp"
+            android:textColor="#FFFFFF"
+            android:gravity="center" />
+    </LinearLayout>
+    <android.webkit.WebView
+        android:id="@+id/paystackWebView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+</LinearLayout>
+
+</RelativeLayout>

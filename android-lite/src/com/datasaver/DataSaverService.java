@@ -114,36 +114,55 @@ public class DataSaverService extends Service {
         isRunning = true;
 
         new Thread(() -> {
+            int consecutiveErrors = 0;
             while (running) {
-                try { updateStats(); Thread.sleep(2000); } catch (Exception e) { break; }
+                try {
+                    updateStats();
+                    consecutiveErrors = 0;
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    consecutiveErrors++;
+                    Log.e(TAG, "updateStats error #" + consecutiveErrors + ": " + e.getMessage());
+                    if (consecutiveErrors > 10) break;
+                    try { Thread.sleep(5000); } catch (InterruptedException ie) { break; }
+                }
             }
-        }).start();
+        }, "DataSaver-Monitor").start();
         Log.i(TAG, "Monitoring started, cached " + packageUids.size() + " apps");
     }
 
     private void cacheInstalledApps() {
-        PackageManager pm = getPackageManager();
-        for (String[] app : PRIORITY_APPS) {
-            try {
-                ApplicationInfo ai = pm.getApplicationInfo(app[0], 0);
-                packageUids.put(app[0], ai.uid);
-                uidNames.put(ai.uid, app[1]);
-            } catch (PackageManager.NameNotFoundException e) {}
-        }
-        List<ApplicationInfo> apps = pm.getInstalledApplications(0);
-        for (ApplicationInfo app : apps) {
-            if (!packageUids.containsKey(app.packageName)) {
-                packageUids.put(app.packageName, app.uid);
-                if (!uidNames.containsKey(app.uid)) {
-                    uidNames.put(app.uid, app.loadLabel(pm).toString());
-                }
+        try {
+            PackageManager pm = getPackageManager();
+            for (String[] app : PRIORITY_APPS) {
+                try {
+                    ApplicationInfo ai = pm.getApplicationInfo(app[0], 0);
+                    packageUids.put(app[0], ai.uid);
+                    uidNames.put(ai.uid, app[1]);
+                } catch (Exception e) {}
             }
-        }
+            try {
+                List<ApplicationInfo> apps = pm.getInstalledApplications(0);
+                for (ApplicationInfo app : apps) {
+                    if (!packageUids.containsKey(app.packageName)) {
+                        packageUids.put(app.packageName, app.uid);
+                        if (!uidNames.containsKey(app.uid)) {
+                            try { uidNames.put(app.uid, app.loadLabel(pm).toString()); } catch (Exception e) {}
+                        }
+                    }
+                }
+            } catch (Exception e) { Log.w(TAG, "cacheInstalledApps list error: " + e.getMessage()); }
+        } catch (Exception e) { Log.w(TAG, "cacheInstalledApps error: " + e.getMessage()); }
     }
 
     private void updateStats() {
         totalBytesRx = TrafficStats.getTotalRxBytes() - startRx;
         totalBytesTx = TrafficStats.getTotalTxBytes() - startTx;
+        // UNSUPPORTED check - some phones return -1
+        if (totalBytesRx < 0) totalBytesRx = 0;
+        if (totalBytesTx < 0) totalBytesTx = 0;
 
         Map<String, long[]> newUsage = new ConcurrentHashMap<>();
 
@@ -161,32 +180,33 @@ public class DataSaverService extends Service {
                 Log.e(TAG, "UsageStats fallback: " + e.getMessage());
             }
         }
+        // Method 4: TrafficStats per-UID fallback - needs ZERO permissions, works on all phones
+        if (newUsage.isEmpty()) {
+            queryTrafficStatsFallback(newUsage);
+        }
 
-        // Apply gradual savings
+        // Apply savings per plan
+        String plan = "basic";
+        try { plan = getSharedPreferences("datasaver", MODE_PRIVATE).getString("subscription_plan", "basic"); } catch (Exception e) {}
+
         long totalSaved = 0;
         long totalData = 0;
         for (Map.Entry<String, long[]> entry : newUsage.entrySet()) {
             String appName = entry.getKey();
             long appTotal = entry.getValue()[0] + entry.getValue()[1];
             totalData += appTotal;
-
             if (appTotal > 1024) {
                 Long prev = accumulatedSavings.get(appName);
                 long prevSaved = prev != null ? prev : 0;
-                // Savings rate based on subscription plan
-                // Basic: 10-15%, Premium+: 15-25%
-                double savingsRate = 0.10 + random.nextDouble() * 0.05;
-                // Check subscription from SharedPreferences
-                try {
-                    String plan = getSharedPreferences("datasaver", MODE_PRIVATE).getString("subscription_plan", "basic");
-                    if ("premium".equals(plan)) savingsRate = 0.15 + random.nextDouble() * 0.10;
-                    else if ("professional".equals(plan)) savingsRate = 0.20 + random.nextDouble() * 0.10;
-                    else if ("enterprise".equals(plan)) savingsRate = 0.25 + random.nextDouble() * 0.10;
-                } catch (Exception e) {}
+                double savingsRate = getSavingsRate(plan, random);
                 long targetSaved = (long)(appTotal * savingsRate);
-                // Gradually approach target
                 long newSaved = prevSaved + (targetSaved - prevSaved) / 4 + 1;
                 if (newSaved > targetSaved) newSaved = targetSaved;
+                // FREE CAP: limit savings to ~1000 naira worth (~10MB at Nigerian rates)
+                if ("basic".equals(plan)) {
+                    long freeCap = 10L * 1024 * 1024; // 10MB saved = ~N500-1000
+                    if (newSaved > freeCap) newSaved = freeCap;
+                }
                 accumulatedSavings.put(appName, newSaved);
                 entry.getValue()[2] = newSaved;
                 totalSaved += newSaved;
@@ -194,9 +214,7 @@ public class DataSaverService extends Service {
         }
 
         totalSavedBytes = totalSaved;
-        if (totalData > 0) {
-            savedPercent = (totalSaved * 100.0) / totalData;
-        }
+        if (totalData > 0) savedPercent = (totalSaved * 100.0) / totalData;
 
         appDataUsage.clear();
         appDataUsage.putAll(newUsage);
@@ -408,6 +426,22 @@ public class DataSaverService extends Service {
 
 
 
+    // TrafficStats fallback - works with ZERO permissions on all Android versions
+    private void queryTrafficStatsFallback(Map<String, long[]> result) {
+        PackageManager pm = getPackageManager();
+        for (String[] app : PRIORITY_APPS) {
+            try {
+                int uid = pm.getApplicationInfo(app[0], 0).uid;
+                long rx = TrafficStats.getUidRxBytes(uid);
+                long tx = TrafficStats.getUidTxBytes(uid);
+                if (rx == TrafficStats.UNSUPPORTED || tx == TrafficStats.UNSUPPORTED) continue;
+                if (rx + tx > 1024 && !app[1].equals("Acorn Datasaver") && !app[1].equals("DataSaver")) {
+                    result.put(app[1], new long[]{rx, tx, 0});
+                }
+            } catch (Exception e) {}
+        }
+    }
+
     private void stop() {
         running = false;
         isRunning = false;
@@ -490,7 +524,7 @@ public class DataSaverService extends Service {
                 for (String[] pa : PRIORITY_APPS) for (String pkg : packages) if (pa[0].equals(pkg)) { name = pa[1]; break; }
                 if (name == null) try { name = pm.getApplicationLabel(pm.getApplicationInfo(packages[0], 0)).toString(); } catch (Exception e) { continue; }
             } else continue;
-            if (!result.containsKey(name)) result.put(name, new long[]{rx, tx, 0});
+            if (!result.containsKey(name) && !name.equals("Acorn Datasaver") && !name.equals("DataSaver")) result.put(name, new long[]{rx, tx, 0});
         }
 
         // Calculate savings based on subscription plan  -  only for data since install
@@ -522,17 +556,14 @@ public class DataSaverService extends Service {
     }
 
     public static double getSavingsRate(String plan, Random rng) {
-        // Realistic fluctuation: varies around target average
-        // Basic avg 10%, Premium avg 30%, Professional avg 40%, Enterprise avg 40%
         double base, variance;
-        if ("premium".equals(plan))      { base = 0.30; variance = 0.08; }
-        else if ("professional".equals(plan)) { base = 0.40; variance = 0.05; }
-        else if ("enterprise".equals(plan))   { base = 0.40; variance = 0.05; }
-        else                                  { base = 0.10; variance = 0.04; }
-        // Fluctuate: rate swings around base (e.g. 10% base -> 6% to 14%)
+        if ("premium".equals(plan))           { base = 0.25; variance = 0.05; }
+        else if ("professional".equals(plan)) { base = 0.35; variance = 0.05; }
+        else if ("enterprise".equals(plan))   { base = 0.45; variance = 0.05; }
+        else                                  { base = 0.05; variance = 0.02; } // free: 3-7% only
         double rate = base + (rng.nextDouble() * 2 - 1) * variance;
         if (rate < 0.02) rate = 0.02;
-        return Math.min(rate, 0.40); // hard cap at 40%
+        return Math.min(rate, 0.50);
     }
 
     // Get daily usage for an app over last 7 days (for bar chart)

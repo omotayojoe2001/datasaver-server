@@ -206,7 +206,18 @@ public class MainActivity extends Activity {
         tvWalletBalance = findViewById(R.id.tvWalletBalance);
         tvWalletBalance.setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
         findViewById(R.id.btnAddFunds).setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
-        fetchWalletBalance();
+        // Warm up server first, then fetch data (prevents timeout on cold start)
+        warmUpServerThenLoad();
+        // Ask for usage permission immediately on first launch
+        if (!hasUsagePermission()) {
+            new AlertDialog.Builder(this)
+                .setTitle("Enable App Data Tracking")
+                .setMessage("To show which apps are using your data, Acorn Datasaver needs Usage Access permission.\n\n1. Tap ALLOW below\n2. Find 'Acorn Datasaver' in the list\n3. Turn it ON\n4. Come back to the app")
+                .setPositiveButton("Allow", (d, w) -> startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)))
+                .setNegativeButton("Skip", null)
+                .setCancelable(false)
+                .show();
+        }
         tvSavedValue = findViewById(R.id.tvSavedValue);
 
         // Load app usage in background (show loading state first)
@@ -237,13 +248,9 @@ public class MainActivity extends Activity {
         restoreSavedStats();
         // Load real savings from server (survives restarts)
         loadSavingsFromServer();
-        // Restore VPN savings from SharedPreferences as fallback
-        long savedAdBytes = prefs().getLong("real_ad_bytes", 0);
-        long savedBgBytes = prefs().getLong("real_bg_bytes", 0);
+        // Restore VPN counters from SharedPreferences
         long savedAdReqs = prefs().getLong("real_ad_requests", 0);
         long savedBgSyncs = prefs().getLong("real_bg_syncs", 0);
-        if (savedAdBytes > DataSaverVpnService.blockedAdBytes.get()) DataSaverVpnService.blockedAdBytes.set(savedAdBytes);
-        if (savedBgBytes > DataSaverVpnService.blockedBgBytes.get()) DataSaverVpnService.blockedBgBytes.set(savedBgBytes);
         if (savedAdReqs > DataSaverVpnService.blockedAdRequests.get()) DataSaverVpnService.blockedAdRequests.set(savedAdReqs);
         if (savedBgSyncs > DataSaverVpnService.blockedBgSyncs.get()) DataSaverVpnService.blockedBgSyncs.set(savedBgSyncs);
         // Show loading state until data is ready
@@ -257,6 +264,190 @@ public class MainActivity extends Activity {
         initSavingsCard();
         initFingerprintLogin();
         initEarnTab();
+        initNotificationBell();
+
+        // Handle notification open intent
+        if (getIntent() != null && getIntent().getBooleanExtra("open_notifications", false)) {
+            handler.postDelayed(() -> showNotificationInbox(), 500);
+        }
+
+        // Handle referral link (datasaver.app/ref/CODE)
+        if (getIntent() != null && getIntent().getData() != null) {
+            String uri = getIntent().getData().toString();
+            if (uri.contains("/ref/")) {
+                String code = uri.substring(uri.lastIndexOf("/ref/") + 5);
+                if (!code.isEmpty()) {
+                    prefs().edit().putString("pending_referral_code", code).apply();
+                    Toast.makeText(this, "Referral link detected! Sign up to earn rewards.", Toast.LENGTH_LONG).show();
+                }
+            }
+        }
+    }
+
+    // ==================== NOTIFICATIONS ====================
+
+    private TextView tvNotifBadge;
+
+    private void initNotificationBell() {
+        tvNotifBadge = findViewById(R.id.tvNotifBadge);
+        findViewById(R.id.btnNotifBell).setOnClickListener(v -> showNotificationInbox());
+        // Restore unread count
+        DataSaverVpnService.unreadNotifCount = prefs().getInt("unread_notif_count", 0);
+        updateNotifBadge();
+    }
+
+    private void updateNotifBadge() {
+        int count = DataSaverVpnService.unreadNotifCount;
+        if (count > 0) {
+            tvNotifBadge.setVisibility(View.VISIBLE);
+            tvNotifBadge.setText(count > 99 ? "99+" : String.valueOf(count));
+        } else {
+            tvNotifBadge.setVisibility(View.GONE);
+        }
+    }
+
+    private void showNotificationInbox() {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) {
+            Toast.makeText(this, "Please login to see notifications", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Build dialog with scrollable container
+        LinearLayout dialogLayout = new LinearLayout(this);
+        dialogLayout.setOrientation(LinearLayout.VERTICAL);
+        dialogLayout.setPadding(dp(16), dp(12), dp(16), dp(8));
+
+        TextView tvLoading = new TextView(this);
+        tvLoading.setText("Loading notifications...");
+        tvLoading.setTextSize(14);
+        tvLoading.setTextColor(0xFF888888);
+        tvLoading.setGravity(Gravity.CENTER);
+        tvLoading.setPadding(0, dp(20), 0, dp(20));
+        dialogLayout.addView(tvLoading);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle("Notifications")
+            .setView(dialogLayout)
+            .setNegativeButton("Close", null)
+            .setNeutralButton("Refresh", (d, w) -> {
+                d.dismiss();
+                showNotificationInbox();
+            })
+            .show();
+
+        // Fetch notifications from server
+        new Thread(() -> {
+            try {
+                URL url = new URL(SERVER_URL + "/api/notifications?phone=" + phone + "&limit=30");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(30000);
+                conn.setReadTimeout(30000);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONArray arr = new JSONArray(sb.toString());
+
+                handler.post(() -> {
+                    dialogLayout.removeAllViews();
+                    if (arr.length() == 0) {
+                        TextView tvEmpty = new TextView(this);
+                        tvEmpty.setText("No notifications yet.\n\nWe'll notify you about rewards, promos, and important updates.");
+                        tvEmpty.setTextSize(14);
+                        tvEmpty.setTextColor(0xFF888888);
+                        tvEmpty.setGravity(Gravity.CENTER);
+                        tvEmpty.setPadding(0, dp(30), 0, dp(30));
+                        dialogLayout.addView(tvEmpty);
+                        return;
+                    }
+
+                    for (int i = 0; i < arr.length(); i++) {
+                        try {
+                            JSONObject notif = arr.getJSONObject(i);
+                            String title = notif.optString("title", "DataSaver");
+                            String body = notif.optString("body", "");
+                            String type = notif.optString("type", "general");
+                            String date = notif.optString("created_at", "");
+                            String dateShort = date.length() > 10 ? date.substring(0, 10) : date;
+
+                            LinearLayout card = new LinearLayout(this);
+                            card.setOrientation(LinearLayout.VERTICAL);
+                            card.setBackground(getResources().getDrawable(R.drawable.card_bg));
+                            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+                            card.setElevation(dp(2));
+                            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                            lp.bottomMargin = dp(8);
+                            card.setLayoutParams(lp);
+
+                            // Icon + Title row
+                            LinearLayout row = new LinearLayout(this);
+                            row.setOrientation(LinearLayout.HORIZONTAL);
+                            row.setGravity(Gravity.CENTER_VERTICAL);
+
+                            TextView icon = new TextView(this);
+                            String emoji = "\uD83D\uDD14";
+                            if ("promo".equals(type)) emoji = "\uD83C\uDF89";
+                            else if ("reward".equals(type)) emoji = "\uD83C\uDF81";
+                            else if ("alert".equals(type)) emoji = "\u26A0\uFE0F";
+                            else if ("update".equals(type)) emoji = "\uD83D\uDCE2";
+                            icon.setText(emoji);
+                            icon.setTextSize(18);
+                            icon.setPadding(0, 0, dp(8), 0);
+                            row.addView(icon);
+
+                            TextView tvTitle = new TextView(this);
+                            tvTitle.setText(title);
+                            tvTitle.setTextSize(14);
+                            tvTitle.setTextColor(0xFF333333);
+                            tvTitle.setTypeface(null, Typeface.BOLD);
+                            tvTitle.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+                            row.addView(tvTitle);
+                            card.addView(row);
+
+                            // Body
+                            if (!body.isEmpty()) {
+                                TextView tvBody = new TextView(this);
+                                tvBody.setText(body);
+                                tvBody.setTextSize(13);
+                                tvBody.setTextColor(0xFF555555);
+                                tvBody.setPadding(dp(26), dp(4), 0, 0);
+                                card.addView(tvBody);
+                            }
+
+                            // Date
+                            TextView tvDate = new TextView(this);
+                            tvDate.setText(dateShort);
+                            tvDate.setTextSize(11);
+                            tvDate.setTextColor(0xFF999999);
+                            tvDate.setPadding(dp(26), dp(4), 0, 0);
+                            card.addView(tvDate);
+
+                            dialogLayout.addView(card);
+                        } catch (Exception e) {}
+                    }
+                });
+            } catch (Exception e) {
+                handler.post(() -> {
+                    dialogLayout.removeAllViews();
+                    TextView tvErr = new TextView(MainActivity.this);
+                    tvErr.setText("Could not load notifications.\nCheck your internet connection.");
+                    tvErr.setTextSize(14);
+                    tvErr.setTextColor(0xFFC62828);
+                    tvErr.setGravity(Gravity.CENTER);
+                    tvErr.setPadding(0, dp(20), 0, dp(20));
+                    dialogLayout.addView(tvErr);
+                });
+            }
+
+            // Reset unread count
+            DataSaverVpnService.unreadNotifCount = 0;
+            DataSaverVpnService.hasNewNotif = false;
+            prefs().edit().putInt("unread_notif_count", 0).apply();
+            handler.post(() -> updateNotifBadge());
+        }).start();
     }
 
     // ==================== TIPS ====================
@@ -283,16 +474,10 @@ public class MainActivity extends Activity {
 
     private void updateTipStyle(TextView tvTip) {
         tvTip.setText(DATA_TIPS[currentTipIndex]);
-        // Alternate: even = white bg/dark text, odd = dark bg/white text
+        tvTip.setTextColor(0xFF333333);
         LinearLayout tipContainer = (LinearLayout) tvTip.getParent();
         if (tipContainer != null) {
-            if (currentTipIndex % 2 == 0) {
-                tipContainer.setBackground(getResources().getDrawable(R.drawable.card_bg));
-                tvTip.setTextColor(0xFF444444);
-            } else {
-                tipContainer.setBackgroundColor(0xFF1A237E);
-                tvTip.setTextColor(0xFFE8EAF6);
-            }
+            tipContainer.setBackground(getResources().getDrawable(R.drawable.card_bg));
         }
     }
 
@@ -310,44 +495,27 @@ public class MainActivity extends Activity {
             try {
                 URL url = new URL(SERVER_URL + "/api/savings/" + phone);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
+                conn.setConnectTimeout(45000);
+                conn.setReadTimeout(45000);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder();
                 String line;
                 while ((line = reader.readLine()) != null) sb.append(line);
                 reader.close();
                 JSONObject res = new JSONObject(sb.toString());
-                long serverTotal = res.optLong("total_saved", 0);
                 long serverBlocked = res.optLong("total_blocked", 0);
-                // Use server values if they're higher than local
-                if (serverTotal > DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get()) {
-                    // Server has higher total — restore it. Keep existing ratio or default to ad bytes
-                    long currentAd = DataSaverVpnService.blockedAdBytes.get();
-                    long currentBg = DataSaverVpnService.blockedBgBytes.get();
-                    if (currentAd + currentBg > 0) {
-                        // Scale up proportionally
-                        double ratio = (double) serverTotal / (currentAd + currentBg);
-                        DataSaverVpnService.blockedAdBytes.set((long)(currentAd * ratio));
-                        DataSaverVpnService.blockedBgBytes.set(serverTotal - (long)(currentAd * ratio));
+                // Use server value if higher than local (only real counts)
+                if (serverBlocked > DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get()) {
+                    long currentAdR = DataSaverVpnService.blockedAdRequests.get();
+                    long currentBgR = DataSaverVpnService.blockedBgSyncs.get();
+                    if (currentAdR + currentBgR > 0) {
+                        double ratio = (double) serverBlocked / (currentAdR + currentBgR);
+                        DataSaverVpnService.blockedAdRequests.set((long)(currentAdR * ratio));
+                        DataSaverVpnService.blockedBgSyncs.set(serverBlocked - (long)(currentAdR * ratio));
                     } else {
-                        DataSaverVpnService.blockedAdBytes.set(serverTotal);
+                        DataSaverVpnService.blockedAdRequests.set(serverBlocked);
                     }
-                    if (serverBlocked > DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get()) {
-                        long currentAdR = DataSaverVpnService.blockedAdRequests.get();
-                        long currentBgR = DataSaverVpnService.blockedBgSyncs.get();
-                        if (currentAdR + currentBgR > 0) {
-                            double ratio = (double) serverBlocked / (currentAdR + currentBgR);
-                            DataSaverVpnService.blockedAdRequests.set((long)(currentAdR * ratio));
-                            DataSaverVpnService.blockedBgSyncs.set(serverBlocked - (long)(currentAdR * ratio));
-                        } else {
-                            DataSaverVpnService.blockedAdRequests.set(serverBlocked);
-                        }
-                    }
-                    // Also save to SharedPreferences
                     prefs().edit()
-                        .putLong("real_ad_bytes", DataSaverVpnService.blockedAdBytes.get())
-                        .putLong("real_bg_bytes", DataSaverVpnService.blockedBgBytes.get())
                         .putLong("real_ad_requests", DataSaverVpnService.blockedAdRequests.get())
                         .putLong("real_bg_syncs", DataSaverVpnService.blockedBgSyncs.get())
                         .apply();
@@ -420,6 +588,7 @@ public class MainActivity extends Activity {
                             android.hardware.biometrics.BiometricPrompt.AuthenticationResult result) {
                         // Load user data from server using saved phone
                         loginOverlay.setVisibility(View.GONE);
+                        findViewById(R.id.bottomNav).setVisibility(View.VISIBLE);
                         fetchWalletBalance(); // This also syncs name/email from server
                         refreshProfileUI();
                         loadAppUsageBackground();
@@ -459,11 +628,13 @@ public class MainActivity extends Activity {
             switchAuthTab(true, (TextView) findViewById(R.id.tabLogin), (TextView) findViewById(R.id.tabSignup));
         }
 
+            loginOverlay.setVisibility(View.VISIBLE);
+
+
         TextView tabLogin = findViewById(R.id.tabLogin);
         TextView tabSignup = findViewById(R.id.tabSignup);
         tabLogin.setOnClickListener(v -> switchAuthTab(false, tabLogin, tabSignup));
         tabSignup.setOnClickListener(v -> switchAuthTab(true, tabLogin, tabSignup));
-
         TextView tvLoginStatus = findViewById(R.id.tvLoginStatus);
 
         // LOGIN button
@@ -483,8 +654,8 @@ public class MainActivity extends Activity {
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                     conn.setRequestMethod("POST");
                     conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setConnectTimeout(15000);
-                    conn.setReadTimeout(15000);
+                    conn.setConnectTimeout(45000);
+                    conn.setReadTimeout(45000);
                     conn.setDoOutput(true);
                     JSONObject body = new JSONObject();
                     if (identity.contains("@")) body.put("email", identity);
@@ -513,9 +684,11 @@ public class MainActivity extends Activity {
                                 .putString("name", rName)
                                 .putString("phone", rPhone)
                                 .putString("email", rEmail)
-                                .putString("subscription_plan", res.optString("subscription_plan", "basic"))
+                                .putString("subscription_plan", res.optString("subscription_plan", "none"))
+                                .putString("referral_code", res.optString("referral_code", ""))
                                 .apply();
                             loginOverlay.setVisibility(View.GONE);
+                            findViewById(R.id.bottomNav).setVisibility(View.VISIBLE);
                             refreshProfileUI();
                             fetchWalletBalance();
                             // If name/email missing from server, push from signup data
@@ -558,14 +731,18 @@ public class MainActivity extends Activity {
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                     conn.setRequestMethod("POST");
                     conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setConnectTimeout(15000);
-                    conn.setReadTimeout(15000);
+                    conn.setConnectTimeout(45000);
+                    conn.setReadTimeout(45000);
                     conn.setDoOutput(true);
                     JSONObject body = new JSONObject();
                     body.put("email", email);
                     body.put("pin", pin);
                     body.put("name", name);
                     if (!ph.isEmpty()) body.put("phone", ph);
+                    // Include referral code if user came from a referral link
+                    String refCode = getIntent() != null ? getIntent().getStringExtra("referral_code") : null;
+                    if (refCode == null) refCode = prefs().getString("pending_referral_code", "");
+                    if (!refCode.isEmpty()) body.put("referral_code", refCode);
                     OutputStream os = conn.getOutputStream();
                     os.write(body.toString().getBytes());
                     os.close();
@@ -587,8 +764,12 @@ public class MainActivity extends Activity {
                                 .putString("phone", ph)
                                 .putString("email", email)
                                 .putString("password", pin)
+                                .putString("referral_code", res.optString("referral_code", ""))
                                 .apply();
+                            // Clear pending referral
+                            prefs().edit().remove("pending_referral_code").apply();
                             loginOverlay.setVisibility(View.GONE);
+                            findViewById(R.id.bottomNav).setVisibility(View.VISIBLE);
                             refreshProfileUI();
                             fetchWalletBalance();
                             Toast.makeText(this, "Welcome, " + name + "!", Toast.LENGTH_SHORT).show();
@@ -651,19 +832,48 @@ public class MainActivity extends Activity {
 
     private void showAuthError(TextView tv, String msg) {
         tv.setText(msg);
-        tv.setTextColor(0xFFD32F2F);
+        tv.setTextColor(0xFFC62828);
         tv.setVisibility(View.VISIBLE);
     }
 
+    private void warmUpServerThenLoad() {
+        // Ping /health first — wakes up Render server before real API calls
+        // If server responds fast (already awake), load immediately
+        // If slow (cold start), wait for it then load — no timeout for user
+        new Thread(() -> {
+            long start = System.currentTimeMillis();
+            boolean awake = false;
+            for (int attempt = 0; attempt < 5; attempt++) {
+                try {
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection)
+                        new java.net.URL(SERVER_URL + "/health").openConnection();
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(15000);
+                    int code = c.getResponseCode();
+                    if (code == 200) { awake = true; break; }
+                } catch (Exception e) {
+                    // Server still waking up — wait and retry
+                    try { Thread.sleep(6000); } catch (InterruptedException ie) { break; }
+                }
+            }
+            // Server is awake (or we gave up after 5 tries) — now load real data
+            handler.post(() -> fetchWalletBalance());
+        }).start();
+    }
+
     private void fetchWalletBalance() {
+        fetchWalletBalanceWithRetry(0);
+    }
+
+    private void fetchWalletBalanceWithRetry(int attempt) {
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) { tvWalletBalance.setText("--"); return; }
         new Thread(() -> {
             try {
                 URL url = new URL(SERVER_URL + "/api/user/" + phone);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
+                conn.setConnectTimeout(45000);
+                conn.setReadTimeout(45000);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder();
                 String line;
@@ -671,7 +881,6 @@ public class MainActivity extends Activity {
                 reader.close();
                 JSONObject res = new JSONObject(sb.toString());
                 double bal = res.optDouble("wallet_balance", 0);
-                // Re-sync name and email from server
                 String serverName = res.isNull("name") ? "" : res.optString("name", "");
                 String serverEmail = res.isNull("email") ? "" : res.optString("email", "");
                 if (!serverName.isEmpty() && !"null".equals(serverName)) {
@@ -680,7 +889,6 @@ public class MainActivity extends Activity {
                 if (!serverEmail.isEmpty() && !"null".equals(serverEmail)) {
                     prefs().edit().putString("email", serverEmail).apply();
                 }
-                // Restore profile photo from server
                 String serverPhoto = res.isNull("photo_base64") ? "" : res.optString("photo_base64", "");
                 if (!serverPhoto.isEmpty() && !"null".equals(serverPhoto)) {
                     try {
@@ -701,7 +909,12 @@ public class MainActivity extends Activity {
                     refreshProfileUI();
                 });
             } catch (Exception e) {
-                handler.post(() -> tvWalletBalance.setText("\u20a60"));
+                if (attempt < 2) {
+                    // Retry after 5s (server may be waking up)
+                    handler.postDelayed(() -> fetchWalletBalanceWithRetry(attempt + 1), 5000);
+                } else {
+                    handler.post(() -> tvWalletBalance.setText("\u20a60"));
+                }
             }
         }).start();
     }
@@ -727,11 +940,11 @@ public class MainActivity extends Activity {
         for (int i = 0; i < ids.length; i++) {
             TextView tv = findViewById(ids[i]);
             if (amounts[i] == amount) {
-                tv.setBackgroundColor(0xFF1565C0);
+                tv.setBackgroundColor(0xFFC62828);
                 tv.setTextColor(0xFFFFFFFF);
             } else {
                 tv.setBackgroundColor(0xFFFFFFFF);
-                tv.setTextColor(0xFF1565C0);
+                tv.setTextColor(0xFFC62828);
             }
         }
     }
@@ -793,6 +1006,10 @@ public class MainActivity extends Activity {
     }
 
     private void fetchAndLoadPlans() {
+        fetchAndLoadPlansWithRetry(0);
+    }
+
+    private void fetchAndLoadPlansWithRetry(int attempt) {
         dataPlansContainer.removeAllViews();
         selectedDataPlanIndex = -1;
         if (selectedNetwork == null) {
@@ -801,15 +1018,15 @@ public class MainActivity extends Activity {
             return;
         }
         tvSelectNetwork.setVisibility(View.VISIBLE);
-        tvSelectNetwork.setText("Loading plans...");
+        tvSelectNetwork.setText(attempt > 0 ? "Connecting to server..." : "Loading plans...");
 
         new Thread(() -> {
             try {
                 URL url = new URL(SERVER_URL + "/api/plans?network=" + selectedNetwork);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
+                conn.setConnectTimeout(45000);
+                conn.setReadTimeout(45000);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder();
                 String line;
@@ -821,11 +1038,15 @@ public class MainActivity extends Activity {
                 for (int i = 0; i < arr.length(); i++) plans.add(arr.getJSONObject(i));
                 handler.post(() -> showDataPlans(plans));
             } catch (Exception e) {
-                handler.post(() -> {
-                    tvSelectNetwork.setText("Failed to load plans. Tap to retry.");
-                    tvSelectNetwork.setVisibility(View.VISIBLE);
-                    tvSelectNetwork.setOnClickListener(v -> fetchAndLoadPlans());
-                });
+                if (attempt < 2) {
+                    handler.postDelayed(() -> fetchAndLoadPlansWithRetry(attempt + 1), 5000);
+                } else {
+                    handler.post(() -> {
+                        tvSelectNetwork.setText("Failed to load plans. Tap to retry.");
+                        tvSelectNetwork.setVisibility(View.VISIBLE);
+                        tvSelectNetwork.setOnClickListener(v -> fetchAndLoadPlans());
+                    });
+                }
             }
         }).start();
     }
@@ -908,7 +1129,7 @@ public class MainActivity extends Activity {
             TextView header = new TextView(this);
             header.setText(title);
             header.setTextSize(14);
-            header.setTextColor(0xFF1565C0);
+            header.setTextColor(0xFFC62828);
             header.setTypeface(null, Typeface.BOLD);
             header.setPadding(0, dp(12), 0, dp(8));
             dataPlansContainer.addView(header);
@@ -936,7 +1157,7 @@ public class MainActivity extends Activity {
                 TextView tvSize = new TextView(this);
                 tvSize.setText(plan.getString("size"));
                 tvSize.setTextSize(16);
-                tvSize.setTextColor(0xFF1565C0);
+                tvSize.setTextColor(0xFFC62828);
                 tvSize.setTypeface(null, Typeface.BOLD);
                 left.addView(tvSize);
 
@@ -1092,7 +1313,7 @@ public class MainActivity extends Activity {
         TextView icon = new TextView(this);
         icon.setText(success ? "OK" : "X");
         icon.setTextSize(24);
-        icon.setTextColor(success ? 0xFF43A047 : 0xFFD32F2F);
+        icon.setTextColor(success ? 0xFF43A047 : 0xFFC62828);
         icon.setTypeface(null, Typeface.BOLD);
         icon.setGravity(Gravity.CENTER);
         icon.setPadding(0, 0, 0, dp(12));
@@ -1147,7 +1368,7 @@ public class MainActivity extends Activity {
         TextView tvMsg = new TextView(this);
         tvMsg.setText(message);
         tvMsg.setTextSize(15);
-        tvMsg.setTextColor(0xFFD32F2F);
+        tvMsg.setTextColor(0xFFC62828);
         tvMsg.setGravity(Gravity.CENTER);
         tvMsg.setPadding(0, 0, 0, dp(16));
         layout.addView(tvMsg);
@@ -1174,7 +1395,7 @@ public class MainActivity extends Activity {
             TextView btn = new TextView(this);
             btn.setText("\u20a6" + a);
             btn.setTextSize(12);
-            btn.setTextColor(0xFF1565C0);
+            btn.setTextColor(0xFFC62828);
             btn.setTypeface(null, Typeface.BOLD);
             btn.setGravity(Gravity.CENTER);
             btn.setPadding(dp(8), dp(6), dp(8), dp(6));
@@ -1217,8 +1438,8 @@ public class MainActivity extends Activity {
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
-                conn.setConnectTimeout(15000);
-                conn.setReadTimeout(15000);
+                conn.setConnectTimeout(45000);
+                conn.setReadTimeout(45000);
                 conn.setDoOutput(true);
                 JSONObject body = new JSONObject();
                 body.put("phone", phone);
@@ -1270,8 +1491,8 @@ public class MainActivity extends Activity {
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
-                conn.setConnectTimeout(20000);
-                conn.setReadTimeout(20000);
+                conn.setConnectTimeout(45000);
+                conn.setReadTimeout(45000);
                 conn.setDoOutput(true);
                 JSONObject body = new JSONObject();
                 body.put("reference", ref);
@@ -1374,6 +1595,34 @@ public class MainActivity extends Activity {
         if (tab == 2) loadSavingsHistory();
     }
 
+    private void showBlockedAdsLog(LinearLayout container) {
+        showBlockedAppsForDate(new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(new java.util.Date()));
+    }
+
+    private void showBlockedAppsForDate(String date) {
+        android.content.SharedPreferences sp = getSharedPreferences("datasaver_blocks", MODE_PRIVATE);
+        String[] apps = {"Facebook","Instagram","TikTok","Twitter/X","YouTube","Google Ads","Amazon Ads","Snapchat","LinkedIn","Ad Network","Other"};
+        StringBuilder msg = new StringBuilder();
+        int total = 0;
+        for (String app : apps) {
+            int c = sp.getInt("blocked_" + date + "_" + app, 0);
+            if (c > 0) { msg.append(app).append(": ").append(c).append(" blocked\n"); total += c; }
+        }
+        if (total == 0) {
+            new AlertDialog.Builder(this)
+                .setTitle("Blocked on " + date)
+                .setMessage("No blocked ads recorded for this date.\n\nMake sure DataSaver VPN was ON while browsing.")
+                .setPositiveButton("OK", null).show();
+            return;
+        }
+        msg.insert(0, "Blocked ads by app on " + date + ":\n\n");
+        msg.append("\nTotal: ").append(total).append(" ads blocked");
+        new AlertDialog.Builder(this)
+            .setTitle("Blocked Ads - " + date)
+            .setMessage(msg.toString())
+            .setPositiveButton("OK", null).show();
+    }
+
     private void loadSavingsHistory() {
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) { tvNoSavings.setText("Login to see savings"); tvNoSavings.setVisibility(View.VISIBLE); return; }
@@ -1383,7 +1632,7 @@ public class MainActivity extends Activity {
  try {
  URL url = new URL(SERVER_URL + "/api/savings/" + phone);
  HttpURLConnection conn = (HttpURLConnection) url.openConnection();
- conn.setConnectTimeout(15000); conn.setReadTimeout(15000);
+ conn.setConnectTimeout(45000); conn.setReadTimeout(45000);
  BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
  StringBuilder sb = new StringBuilder(); String line;
  while ((line = reader.readLine()) != null) sb.append(line);
@@ -1401,9 +1650,9 @@ public class MainActivity extends Activity {
  TextView tvMonth = findViewById(R.id.tvSavingsMonth);
  TextView tvAll = findViewById(R.id.tvSavingsAllTime);
  TextView tvAllB = findViewById(R.id.tvSavingsAllTimeBlocked);
- if (tvToday != null && todayObj != null) tvToday.setText(formatBytes(todayObj.optLong("saved", 0)));
- if (tvWeek != null && weekObj != null) tvWeek.setText(formatBytes(weekObj.optLong("saved", 0)));
- if (tvMonth != null && monthObj != null) tvMonth.setText(formatBytes(monthObj.optLong("saved", 0)));
+                    if (tvToday != null && todayObj != null) tvToday.setText(formatBytes(todayObj.optLong("saved", 0)));
+                    if (tvWeek != null && weekObj != null) tvWeek.setText(formatBytes(weekObj.optLong("saved", 0)));
+                    if (tvMonth != null && monthObj != null) tvMonth.setText(formatBytes(monthObj.optLong("saved", 0)));
  if (tvAll != null) tvAll.setText(formatBytes(totalSaved));
  if (tvAllB != null) tvAllB.setText(totalBlocked + " requests blocked");
  savingsHistoryContainer.removeAllViews();
@@ -1412,7 +1661,7 @@ public class MainActivity extends Activity {
  for (int i = 0; i < history.length() && i < 14; i++) {
  try {
  JSONObject day = history.getJSONObject(i);
- String date = day.optString("date", "");
+ final String date = day.optString("date", "");
                                 long saved = day.optLong("saved_bytes", 0);
  long blocked = day.optLong("blocked_requests", 0);
  if (saved == 0 && blocked == 0) continue;
@@ -1430,28 +1679,31 @@ public class MainActivity extends Activity {
  LinearLayout rc = new LinearLayout(MainActivity.this); rc.setOrientation(LinearLayout.VERTICAL); rc.setGravity(Gravity.END);
  TextView tvS = new TextView(MainActivity.this); tvS.setText(formatBytes(saved)); tvS.setTextSize(14); tvS.setTextColor(0xFF43A047); tvS.setTypeface(null, Typeface.BOLD); rc.addView(tvS);
  TextView tvB = new TextView(MainActivity.this); tvB.setText(blocked + " blocked"); tvB.setTextSize(11); tvB.setTextColor(0xFF888888); rc.addView(tvB);
- row.addView(rc); savingsHistoryContainer.addView(row);
+  final String clickDate = date; row.setOnClickListener(v -> showBlockedAppsForDate(clickDate)); row.addView(rc); savingsHistoryContainer.addView(row);
  } catch (Exception e) {}
  }
- } else { tvNoSavings.setText("No savings data yet"); tvNoSavings.setVisibility(View.VISIBLE); }
+                    } else { tvNoSavings.setText("No savings data yet"); tvNoSavings.setVisibility(View.VISIBLE); }
+                    showBlockedAdsLog(savingsHistoryContainer);
+                    // Show blocked ads log from VPN
+                    showBlockedAdsLog(savingsHistoryContainer);
  });
  } catch (Exception e) {
                 // Fallback to local data
                 handler.post(() -> {
-                    long localSaved = DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get();
                     long localBlocked = DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get();
+                    long localDns = DataSaverVpnService.totalDnsQueries.get();
                     TextView tvToday = findViewById(R.id.tvSavingsToday);
                     TextView tvWeek = findViewById(R.id.tvSavingsWeek);
                     TextView tvMonth = findViewById(R.id.tvSavingsMonth);
                     TextView tvAll = findViewById(R.id.tvSavingsAllTime);
                     TextView tvAllB = findViewById(R.id.tvSavingsAllTimeBlocked);
-                    if (tvToday != null) tvToday.setText(formatBytes(localSaved));
-                    if (tvWeek != null) tvWeek.setText(formatBytes(localSaved));
-                    if (tvMonth != null) tvMonth.setText(formatBytes(localSaved));
-                    if (tvAll != null) tvAll.setText(formatBytes(localSaved));
-                    if (tvAllB != null) tvAllB.setText(localBlocked + " requests blocked");
-                    if (localSaved > 0) tvNoSavings.setVisibility(View.GONE);
-                    else { tvNoSavings.setText("Turn on DataSaver to start saving"); tvNoSavings.setVisibility(View.VISIBLE); }
+                    if (tvToday != null) tvToday.setText(localBlocked + " requests blocked");
+                    if (tvWeek != null) tvWeek.setText(localBlocked + " requests blocked");
+                    if (tvMonth != null) tvMonth.setText(localBlocked + " requests blocked");
+                    if (tvAll != null) tvAll.setText(localBlocked + " requests blocked");
+                    if (tvAllB != null) tvAllB.setText(localDns + " DNS queries");
+                    if (localBlocked > 0) tvNoSavings.setVisibility(View.GONE);
+                    else { tvNoSavings.setText("Turn on DataSaver to start blocking"); tvNoSavings.setVisibility(View.VISIBLE); }
                 });
             }
  }).start();
@@ -1486,7 +1738,7 @@ public class MainActivity extends Activity {
                 // Airtime/data transactions
                 URL url1 = new URL(SERVER_URL + "/api/transactions/" + phone);
                 HttpURLConnection c1 = (HttpURLConnection) url1.openConnection();
-                c1.setConnectTimeout(10000); c1.setReadTimeout(10000);
+                c1.setConnectTimeout(45000); c1.setReadTimeout(45000);
                 BufferedReader r1 = new BufferedReader(new InputStreamReader(c1.getInputStream()));
                 StringBuilder s1 = new StringBuilder(); String l;
                 while ((l = r1.readLine()) != null) s1.append(l); r1.close();
@@ -1497,7 +1749,7 @@ public class MainActivity extends Activity {
                 // Wallet transactions
                 URL url2 = new URL(SERVER_URL + "/api/wallet/transactions/" + phone);
                 HttpURLConnection c2 = (HttpURLConnection) url2.openConnection();
-                c2.setConnectTimeout(10000); c2.setReadTimeout(10000);
+                c2.setConnectTimeout(45000); c2.setReadTimeout(45000);
                 BufferedReader r2 = new BufferedReader(new InputStreamReader(c2.getInputStream()));
                 StringBuilder s2 = new StringBuilder(); String l;
                 while ((l = r2.readLine()) != null) s2.append(l); r2.close();
@@ -1553,7 +1805,7 @@ public class MainActivity extends Activity {
                 status = txn.optString("status", "success");
                 title = type.equals("credit") ? "Wallet Top-up" : desc;
                 amtText = (type.equals("credit") ? "+" : "-") + "\u20a6" + (int) amt;
-                amtColor = type.equals("credit") ? 0xFF43A047 : 0xFFD32F2F;
+                amtColor = type.equals("credit") ? 0xFF43A047 : 0xFFC62828;
             } else {
                 String type = txn.optString("type", "");
                 String network = txn.optString("network", "");
@@ -1562,7 +1814,7 @@ public class MainActivity extends Activity {
                 status = txn.optString("status", "pending");
                 title = type.equals("data") ? network + " " + planSize + " Data" : network + " \u20a6" + amt + " Airtime";
                 amtText = "-\u20a6" + amt;
-                amtColor = 0xFFD32F2F;
+                amtColor = 0xFFC62828;
             }
             date = txn.optString("created_at", "");
             String dateShort = date.length() > 10 ? date.substring(0, 10) : date;
@@ -1589,7 +1841,7 @@ public class MainActivity extends Activity {
             card.addView(row);
 
             TextView d = new TextView(this);
-            int statusColor = "success".equals(status) ? 0xFF43A047 : "failed".equals(status) ? 0xFFD32F2F : 0xFFFF8F00;
+            int statusColor = "success".equals(status) ? 0xFF43A047 : "failed".equals(status) ? 0xFFC62828 : 0xFFFF8F00;
             d.setText(dateShort + " \u2022 " + status.toUpperCase());
             d.setTextSize(11); d.setTextColor(statusColor); d.setPadding(0, dp(2), 0, 0);
             card.addView(d);
@@ -1622,10 +1874,11 @@ public class MainActivity extends Activity {
             addUsageCard(e.getKey(), formatBytes(total), total, saved);
         }
 
-        tvHistorySaved.setText(formatBytes(DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get()));
-        long realSaved = DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get();
-        double pct = totalUsed > 0 ? Math.min((realSaved * 100.0 / totalUsed), 99.9) : 0;
-        tvHistorySavedPct.setText(String.format("You saved %.1f%% of your data", pct));
+        long totalBlocked = DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get();
+        long totalDns = DataSaverVpnService.totalDnsQueries.get();
+        tvHistorySaved.setText(totalBlocked + " requests blocked");
+        double blockRate = totalDns > 0 ? (totalBlocked * 100.0 / totalDns) : 0;
+        tvHistorySavedPct.setText(String.format("%.1f%% block rate", blockRate));
     }
 
     private void addUsageCard(String appName, String amount, long total, long saved) {
@@ -1733,30 +1986,30 @@ public class MainActivity extends Activity {
         if (name.isEmpty() || "null".equals(name)) name = "DataSaver User";
         String phone = sp.getString("phone", "");
         tvProfileName.setText(name);
-        tvProfilePhone.setText(phone.isEmpty() ? "Basic Plan" : phone + " - " + (sp.getString("subscription_plan", "basic").substring(0, 1).toUpperCase() + sp.getString("subscription_plan", "basic").substring(1)) + " Plan");
+        tvProfilePhone.setText(phone.isEmpty() ? "No Plan" : phone + " - " + (sp.getString("subscription_plan", "none").substring(0, 1).toUpperCase() + sp.getString("subscription_plan", "none").substring(1)) + " Plan");
         profilePhoto.setText(name.isEmpty() ? "U" : name.substring(0, 1).toUpperCase());
 
         tvPushNotif.setText(sp.getBoolean("push_notif", true) ? "ON" : "OFF");
-        tvPushNotif.setTextColor(sp.getBoolean("push_notif", true) ? 0xFF43A047 : 0xFFD32F2F);
+        tvPushNotif.setTextColor(sp.getBoolean("push_notif", true) ? 0xFF43A047 : 0xFFC62828);
         tvDailyAlerts.setText(sp.getBoolean("daily_alerts", true) ? "ON" : "OFF");
-        tvDailyAlerts.setTextColor(sp.getBoolean("daily_alerts", true) ? 0xFF43A047 : 0xFFD32F2F);
+        tvDailyAlerts.setTextColor(sp.getBoolean("daily_alerts", true) ? 0xFF43A047 : 0xFFC62828);
 
         String quality = sp.getString("image_quality", "Medium");
         tvImageQuality.setText(quality + " >");
 
         tvWifiCompress.setText(sp.getBoolean("wifi_compress", false) ? "ON" : "OFF");
-        tvWifiCompress.setTextColor(sp.getBoolean("wifi_compress", false) ? 0xFF43A047 : 0xFFD32F2F);
+        tvWifiCompress.setTextColor(sp.getBoolean("wifi_compress", false) ? 0xFF43A047 : 0xFFC62828);
 
         // Background Guard status
         TextView tvBgGuard = findViewById(R.id.tvBgGuard);
         if (tvBgGuard != null) {
             boolean bgOn = sp.getBoolean("bg_block_enabled", true);
             tvBgGuard.setText(bgOn ? "ON" : "OFF");
-            tvBgGuard.setTextColor(bgOn ? 0xFF43A047 : 0xFFD32F2F);
+            tvBgGuard.setTextColor(bgOn ? 0xFF43A047 : 0xFFC62828);
         }
 
         tvServerAddr.setText("*****");
-        String subPlan = sp.getString("subscription_plan", "basic");
+        String subPlan = sp.getString("subscription_plan", "none");
         TextView tvManageSub = findViewById(R.id.tvManageSubLabel);
         if (tvManageSub != null) tvManageSub.setText(subPlan.substring(0, 1).toUpperCase() + subPlan.substring(1) + " >");
         try {
@@ -1764,8 +2017,65 @@ public class MainActivity extends Activity {
             tvAppVersion.setText(vn != null ? "v" + vn : "v1.0.0");
         } catch (Exception e) { tvAppVersion.setText("v1.0.0"); }
 
+        // Hidden dev reset: tap version 5 times to reset all savings data
+        final int[] tapCount = {0};
+        final long[] lastTap = {0};
+        View rowVersion = tvAppVersion.getParent() instanceof View ? (View) tvAppVersion.getParent() : null;
+        View tapTarget = rowVersion != null ? rowVersion : tvAppVersion;
+        tapTarget.setOnClickListener(v -> {
+            long now = System.currentTimeMillis();
+            if (now - lastTap[0] > 2000) tapCount[0] = 0;
+            lastTap[0] = now;
+            tapCount[0]++;
+            if (tapCount[0] >= 5) {
+                tapCount[0] = 0;
+                resetAllSavingsData();
+            }
+        });
+
         // Update profile wallet
         fetchProfileWallet();
+    }
+
+    private void resetAllSavingsData() {
+        new AlertDialog.Builder(this)
+            .setTitle("Reset Savings Data")
+            .setMessage("This will clear all savings counters, the free plan cap, and restart fresh. Use this for testing only.")
+            .setPositiveButton("Reset Everything", (d, w) -> {
+                // Clear all savings counters
+                prefs().edit()
+                    .putLong("real_ad_bytes", 0)
+                    .putLong("real_bg_bytes", 0)
+                    .putLong("real_ad_requests", 0)
+                    .putLong("real_bg_syncs", 0)
+                    .putLong("real_total_packets", 0)
+                    .putLong("savings_today", 0)
+                    .putLong("savings_week", 0)
+                    .putLong("savings_month", 0)
+                    .putLong("install_time", System.currentTimeMillis())
+                    .putBoolean("cap_popup_shown", false)
+                    .remove("saved_appData")
+                    .apply();
+                // Reset live counters
+                DataSaverVpnService.blockedAdRequests.set(0);
+                DataSaverVpnService.blockedBgSyncs.set(0);
+                DataSaverVpnService.totalDnsQueries.set(0);
+                DataSaverVpnService.totalPacketsProcessed.set(0);
+                DataSaverVpnService.perAppBlockedCount.clear();
+                // Reset cap popup flag
+                capPopupShown = false;
+                // Clear app usage
+                DataSaverService.appDataUsage.clear();
+                DataSaverService.totalSavedBytes = 0;
+                DataSaverService.savedPercent = 0;
+                // Refresh UI
+                updateSummary();
+                updateAppCards();
+                hideUpgradeBanner();
+                Toast.makeText(this, "All savings data reset. Fresh start!", Toast.LENGTH_LONG).show();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
     }
 
     private void togglePref(String key, TextView tv) {
@@ -1773,7 +2083,7 @@ public class MainActivity extends Activity {
         boolean current = sp.getBoolean(key, key.equals("wifi_compress") ? false : true);
         sp.edit().putBoolean(key, !current).apply();
         tv.setText(!current ? "ON" : "OFF");
-        tv.setTextColor(!current ? 0xFF43A047 : 0xFFD32F2F);
+        tv.setTextColor(!current ? 0xFF43A047 : 0xFFC62828);
     }
 
     private void fetchProfileWallet() {
@@ -1784,8 +2094,8 @@ public class MainActivity extends Activity {
             try {
                 URL url = new URL(SERVER_URL + "/api/user/" + phone);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
+                conn.setConnectTimeout(45000);
+                conn.setReadTimeout(45000);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder();
                 String line;
@@ -1913,7 +2223,19 @@ public class MainActivity extends Activity {
                             }
                         }
                         prefs().edit().putString("bypass_apps", sb.toString()).apply();
-                        Toast.makeText(this, "Saved! Restart DataSaver to apply changes.", Toast.LENGTH_LONG).show();
+                        // Restart VPN immediately to apply new protected apps
+                        if (DataSaverVpnService.isVpnRunning) {
+                            Intent stopIntent = new Intent(this, DataSaverVpnService.class);
+                            stopIntent.setAction("STOP");
+                            startService(stopIntent);
+                            handler.postDelayed(() -> {
+                                Intent startIntent = new Intent(this, DataSaverVpnService.class);
+                                startService(startIntent);
+                                Toast.makeText(this, "Protected apps updated and applied.", Toast.LENGTH_SHORT).show();
+                            }, 1500);
+                        } else {
+                            Toast.makeText(this, "Protected apps saved.", Toast.LENGTH_SHORT).show();
+                        }
                     })
                     .setNegativeButton("Cancel", null)
                     .show();
@@ -1972,8 +2294,8 @@ public class MainActivity extends Activity {
                         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                         conn.setRequestMethod("POST");
                         conn.setRequestProperty("Content-Type", "application/json");
-                        conn.setConnectTimeout(15000);
-                        conn.setReadTimeout(15000);
+                        conn.setConnectTimeout(45000);
+                        conn.setReadTimeout(45000);
                         conn.setDoOutput(true);
                         JSONObject body = new JSONObject();
                         body.put("phone", originalPhone.isEmpty() ? newPhone : originalPhone);
@@ -2089,6 +2411,8 @@ public class MainActivity extends Activity {
                 switchTab(0);
                 updateUI();
                 loginOverlay.setVisibility(View.VISIBLE);
+                loginOverlay.bringToFront();
+                findViewById(R.id.bottomNav).setVisibility(View.GONE);
                 // Reset to login tab
                 switchAuthTab(false, (TextView) findViewById(R.id.tabLogin), (TextView) findViewById(R.id.tabSignup));
                 Toast.makeText(this, "Logged out", Toast.LENGTH_SHORT).show();
@@ -2108,8 +2432,8 @@ public class MainActivity extends Activity {
     }
 
     private void setCircularPhoto(Bitmap bmp) {
+        // Fix rotation using EXIF data
         int size = dp(72);
-        // Center-crop: scale to fill, then crop center
         int srcW = bmp.getWidth(), srcH = bmp.getHeight();
         int cropSize = Math.min(srcW, srcH);
         int x = (srcW - cropSize) / 2, y = (srcH - cropSize) / 2;
@@ -2126,6 +2450,23 @@ public class MainActivity extends Activity {
         profilePhoto.setText("");
     }
 
+    private Bitmap fixRotation(Uri imageUri, Bitmap bmp) {
+        try {
+            InputStream is = getContentResolver().openInputStream(imageUri);
+            android.media.ExifInterface exif = new android.media.ExifInterface(is);
+            int orientation = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL);
+            is.close();
+            int degrees = 0;
+            if (orientation == android.media.ExifInterface.ORIENTATION_ROTATE_90) degrees = 90;
+            else if (orientation == android.media.ExifInterface.ORIENTATION_ROTATE_180) degrees = 180;
+            else if (orientation == android.media.ExifInterface.ORIENTATION_ROTATE_270) degrees = 270;
+            if (degrees == 0) return bmp;
+            android.graphics.Matrix matrix = new android.graphics.Matrix();
+            matrix.postRotate(degrees);
+            return Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), matrix, true);
+        } catch (Exception e) { return bmp; }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -2133,7 +2474,7 @@ public class MainActivity extends Activity {
             if (resultCode == RESULT_OK) {
                 startServices();
             } else {
-                Toast.makeText(this, "VPN permission required for data saving", Toast.LENGTH_SHORT).show();
+                new AlertDialog.Builder(this).setTitle("VPN Permission Needed").setMessage("Acorn Datasaver needs VPN permission to block ads and save your data.\n\nTap OK and then tap ALLOW on the next screen.").setPositiveButton("Try Again", (d, w) -> toggle()).setNegativeButton("Cancel", null).show();
             }
             return;
         }
@@ -2153,29 +2494,32 @@ public class MainActivity extends Activity {
         }
         if (requestCode == PICK_PHOTO && resultCode == RESULT_OK && data != null) {
             try {
-                InputStream is = getContentResolver().openInputStream(data.getData());
+                Uri imageUri = data.getData();
+                InputStream is = getContentResolver().openInputStream(imageUri);
                 Bitmap bmp = BitmapFactory.decodeStream(is);
                 is.close();
                 if (bmp != null) {
+                    final Bitmap photo = fixRotation(imageUri, bmp);
+                    
                     File f = new File(getFilesDir(), "profile.jpg");
                     FileOutputStream fos = new FileOutputStream(f);
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 80, fos);
+                    photo.compress(Bitmap.CompressFormat.JPEG, 80, fos);
                     fos.close();
                     prefs().edit().putString("photo_path", f.getAbsolutePath()).apply();
-                    setCircularPhoto(bmp);
+                    setCircularPhoto(photo);
                     Toast.makeText(this, "Photo updated", Toast.LENGTH_SHORT).show();
                     // Upload to server
                     new Thread(() -> {
                         try {
                             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                            bmp.compress(Bitmap.CompressFormat.JPEG, 50, baos);
+                            photo.compress(Bitmap.CompressFormat.JPEG, 50, baos);
                             String base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP);
                             URL url = new URL(SERVER_URL + "/api/user/update");
                             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                             conn.setRequestMethod("POST");
                             conn.setRequestProperty("Content-Type", "application/json");
-                            conn.setConnectTimeout(15000);
-                            conn.setReadTimeout(15000);
+                            conn.setConnectTimeout(45000);
+                            conn.setReadTimeout(45000);
                             conn.setDoOutput(true);
                             JSONObject body = new JSONObject();
                             body.put("phone", prefs().getString("phone", ""));
@@ -2195,7 +2539,7 @@ public class MainActivity extends Activity {
 
     // ==================== TABS / HOME ====================
 
-    private String currentPlan = "basic";
+    private String currentPlan = "none";
 
     private void loadSubscriptionPlans() {
         LinearLayout container = findViewById(R.id.subsPlansContainer);
@@ -2209,23 +2553,23 @@ public class MainActivity extends Activity {
                 try {
                     URL url = new URL(SERVER_URL + "/api/subscription/" + phone);
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                    conn.setConnectTimeout(10000);
-                    conn.setReadTimeout(10000);
+                    conn.setConnectTimeout(45000);
+                    conn.setReadTimeout(45000);
                     BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                     StringBuilder sb = new StringBuilder();
                     String line;
                     while ((line = reader.readLine()) != null) sb.append(line);
                     reader.close();
                     JSONObject res = new JSONObject(sb.toString());
-                    currentPlan = res.optString("plan", "basic");
+                    currentPlan = res.optString("plan", "none");
                     String expires = res.optString("expires_at", "");
                     handler.post(() -> {
                         String label = currentPlan.substring(0, 1).toUpperCase() + currentPlan.substring(1);
-                        if (!"basic".equals(currentPlan) && !expires.isEmpty()) {
+                        if (!expires.isEmpty()) {
                             String expDate = expires.length() > 10 ? expires.substring(0, 10) : expires;
                             header.setText("Current: " + label + " (expires " + expDate + ")");
                         } else {
-                            header.setText("Current Plan: " + label + ("basic".equals(currentPlan) ? " (Free)" : ""));
+                            header.setText("Current Plan: " + label);
                         }
                         buildPlanCards(container);
                     });
@@ -2240,28 +2584,38 @@ public class MainActivity extends Activity {
 
     private void buildPlanCards(LinearLayout container) {
         container.removeAllViews();
+        // Plans: {id, name, price, period, deviceLimit, features...}
         String[][] plans = {
-            {"basic", "Basic", "FREE", "",
-             "Block common ads (saves data)",
-             "See which apps use your data",
-             "Data usage tracking"},
-            {"premium", "Premium", "\u20a6500", "/week",
-             "Everything in Basic",
-             "Block all ads and trackers",
-             "Stop background apps from wasting data",
+            {"premium", "Premium", "\u20a6500", "/week", "1",
+             "Ad blocking: UNLIMITED",
+             "Saves 20-30% of your data (5x more)",
+             "No savings cap \u2014 save forever",
+             "Blocks background data: social apps",
+             "Earn tasks: up to 5 tasks/day",
+             "Access to premium-only tasks",
              "Detailed app-by-app analytics",
-             "Priority faster connection"},
-            {"professional", "Professional", "\u20a61,500", "/month",
-             "Everything in Premium",
-             "Maximum data protection",
-             "Block all background data usage",
+             "Max 1 device"},
+            {"professional", "Professional", "\u20a61,500", "/month", "2",
+             "Ad blocking: UNLIMITED",
+             "Saves 30-40% of your data",
+             "No savings cap \u2014 save forever",
+             "Blocks ALL background apps",
+             "Earn tasks: up to 8 tasks/day",
+             "Access to professional-only tasks",
+             "Aggressive image compression",
              "Full savings history and charts",
-             "Use on up to 3 devices"},
-            {"enterprise", "Enterprise", "\u20a65,000", "/month",
-             "Everything in Professional",
-             "Strongest data saving mode",
-             "Use on up to 5 devices",
-             "24/7 priority support"}
+             "Max 2 devices"},
+            {"enterprise", "Enterprise", "\u20a65,000", "/month", "5",
+             "Ad blocking: UNLIMITED",
+             "Saves 40-50% of your data",
+             "No savings cap \u2014 save forever",
+             "Blocks ALL background apps",
+             "Earn tasks: UNLIMITED tasks/day",
+             "Access to ALL tasks including exclusive",
+             "Maximum compression on all content",
+             "Priority server \u2014 fastest speeds",
+             "24/7 priority support",
+             "Max 5 devices"}
         };
 
         for (String[] p : plans) {
@@ -2269,18 +2623,34 @@ public class MainActivity extends Activity {
             String planName = p[1];
             String price = p[2];
             String period = p[3];
+            String deviceLimit = p[4];
             boolean isCurrent = planId.equals(currentPlan);
-            boolean isEnterprise = "enterprise".equals(planId);
 
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
-            card.setBackground(getResources().getDrawable(isEnterprise ? R.drawable.btn_blue_rounded : R.drawable.card_bg));
+            card.setBackground(getResources().getDrawable(R.drawable.card_bg));
             card.setPadding(dp(16), dp(16), dp(16), dp(16));
-            card.setElevation(isEnterprise ? dp(4) : dp(3));
+            card.setElevation(dp(isCurrent ? 6 : 3));
             LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             cp.bottomMargin = dp(12);
             card.setLayoutParams(cp);
+
+            // Badge row
+            String badge = null;
+            int badgeColor = 0xFF999999;
+            if ("premium".equals(planId)) { badge = "\uD83D\uDD25 PROMO: \u20a6500 for 3 months!"; badgeColor = 0xFFC62828; }
+            else if ("professional".equals(planId)) { badge = "BEST VALUE"; badgeColor = 0xFF2E7D32; }
+            else if ("enterprise".equals(planId))   { badge = "MAXIMUM SAVINGS"; badgeColor = 0xFF1565C0; }
+            if (badge != null) {
+                TextView tvBadge = new TextView(this);
+                tvBadge.setText(badge);
+                tvBadge.setTextSize(10);
+                tvBadge.setTypeface(null, Typeface.BOLD);
+                tvBadge.setTextColor(badgeColor);
+                tvBadge.setPadding(0, 0, 0, dp(4));
+                card.addView(tvBadge);
+            }
 
             // Title row
             LinearLayout titleRow = new LinearLayout(this);
@@ -2289,32 +2659,65 @@ public class MainActivity extends Activity {
             tvName.setText(planName);
             tvName.setTextSize(18);
             tvName.setTypeface(null, Typeface.BOLD);
-            tvName.setTextColor(isEnterprise ? 0xFFFFFFFF : 0xFF333333);
+            tvName.setTextColor(0xFF333333);
             tvName.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             titleRow.addView(tvName);
-            TextView tvPrice = new TextView(this);
-            tvPrice.setText(price + period);
-            tvPrice.setTextSize(18);
-            tvPrice.setTypeface(null, Typeface.BOLD);
-            tvPrice.setTextColor(isEnterprise ? 0xFFFFFFFF : ("basic".equals(planId) ? 0xFF43A047 : 0xFF1565C0));
-            titleRow.addView(tvPrice);
+
+            // Price column (promo for premium)
+            LinearLayout priceCol = new LinearLayout(this);
+            priceCol.setOrientation(LinearLayout.VERTICAL);
+            priceCol.setGravity(Gravity.RIGHT);
+            if ("premium".equals(planId)) {
+                // Strikethrough original price
+                TextView tvOld = new TextView(this);
+                tvOld.setText("\u20a6500/week");
+                tvOld.setTextSize(12);
+                tvOld.setTextColor(0xFF999999);
+                tvOld.setPaintFlags(tvOld.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+                priceCol.addView(tvOld);
+                TextView tvPromo = new TextView(this);
+                tvPromo.setText("\u20a6500/3 months");
+                tvPromo.setTextSize(14);
+                tvPromo.setTypeface(null, Typeface.BOLD);
+                tvPromo.setTextColor(0xFFC62828);
+                priceCol.addView(tvPromo);
+            } else {
+                TextView tvPrice = new TextView(this);
+                tvPrice.setText(price + period);
+                tvPrice.setTextSize(18);
+                tvPrice.setTypeface(null, Typeface.BOLD);
+                tvPrice.setTextColor(0xFFC62828);
+                priceCol.addView(tvPrice);
+            }
+            titleRow.addView(priceCol);
             card.addView(titleRow);
+
+            // Device limit
+            TextView tvDevices = new TextView(this);
+            tvDevices.setText("\uD83D\uDCF1 " + deviceLimit + " device" + (Integer.parseInt(deviceLimit) > 1 ? "s" : "") + " max");
+            tvDevices.setTextSize(11);
+            tvDevices.setTypeface(null, Typeface.BOLD);
+            tvDevices.setTextColor(0xFF1565C0);
+            tvDevices.setPadding(0, dp(4), 0, dp(4));
+            card.addView(tvDevices);
 
             // Divider
             View div = new View(this);
-            div.setBackgroundColor(isEnterprise ? 0xFF2979FF : 0xFFEEEEEE);
+            div.setBackgroundColor(0xFFEEEEEE);
             LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
             dlp.topMargin = dp(8);
             dlp.bottomMargin = dp(8);
             div.setLayoutParams(dlp);
             card.addView(div);
 
-            // Features
-            for (int i = 4; i < p.length; i++) {
+            // Features (skip device limit entry)
+            for (int i = 5; i < p.length; i++) {
                 TextView feat = new TextView(this);
-                feat.setText("\u2713  " + p[i]);
+                String featureText = p[i];
+                boolean isLimit = featureText.startsWith("No background") || featureText.startsWith("Capped");
+                feat.setText((isLimit ? "\u2717  " : "\u2713  ") + featureText);
                 feat.setTextSize(13);
-                feat.setTextColor(isEnterprise ? 0xFFE3F2FD : 0xFF555555);
+                feat.setTextColor(isLimit ? 0xFFE53935 : 0xFF555555);
                 feat.setPadding(0, 0, 0, dp(4));
                 card.addView(feat);
             }
@@ -2327,22 +2730,19 @@ public class MainActivity extends Activity {
             btn.setLayoutParams(blp);
             btn.setTextSize(13);
             btn.setTypeface(null, Typeface.BOLD);
+            btn.setBackground(getResources().getDrawable(R.drawable.btn_rounded));
 
             if (isCurrent) {
                 btn.setText("CURRENT PLAN");
                 btn.setTextColor(0xFFFFFFFF);
-                btn.setBackgroundColor(0xFF43A047);
-                btn.setEnabled(false);
-            } else if ("basic".equals(planId)) {
-                btn.setText("FREE PLAN");
-                btn.setTextColor(0xFFFFFFFF);
-                btn.setBackgroundColor(0xFF999999);
+                btn.setBackground(getResources().getDrawable(R.drawable.btn_green_rounded));
                 btn.setEnabled(false);
             } else {
-                btn.setText("SUBSCRIBE - " + price + period);
-                btn.setTextColor(isEnterprise ? 0xFF1565C0 : 0xFFFFFFFF);
-                btn.setBackgroundColor(isEnterprise ? 0xFFFFFFFF : 0xFF1565C0);
-                btn.setOnClickListener(v -> subscribeToPlan(planId, planName, price + period));
+                String btnPrice = "premium".equals(planId) ? "\u20a6500/3mo" : price + period;
+                btn.setText("SUBSCRIBE - " + btnPrice);
+                btn.setTextColor(0xFFFFFFFF);
+                btn.setBackground(getResources().getDrawable(R.drawable.btn_rounded));
+                btn.setOnClickListener(v -> subscribeToPlan(planId, planName, btnPrice));
             }
             card.addView(btn);
             container.addView(card);
@@ -2363,8 +2763,8 @@ public class MainActivity extends Activity {
                         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                         conn.setRequestMethod("POST");
                         conn.setRequestProperty("Content-Type", "application/json");
-                        conn.setConnectTimeout(15000);
-                        conn.setReadTimeout(15000);
+                        conn.setConnectTimeout(45000);
+                        conn.setReadTimeout(45000);
                         conn.setDoOutput(true);
                         JSONObject body = new JSONObject();
                         body.put("phone", phone);
@@ -2415,7 +2815,7 @@ public class MainActivity extends Activity {
 
         TextView[] navItems = {navHome, navAirtime, navData, navTransactions, navEarn, navProfile};
         for (int i = 0; i < navItems.length; i++) {
-            navItems[i].setTextColor(i == tab ? 0xFF1565C0 : 0xFF999999);
+            navItems[i].setTextColor(i == tab ? 0xFFC62828 : 0xFF90A4AE);
             navItems[i].setTypeface(null, i == tab ? Typeface.BOLD : Typeface.NORMAL);
         }
         if (tab == 1) {
@@ -2428,8 +2828,8 @@ public class MainActivity extends Activity {
         if (tab == 3) {
             refreshUsageHistory();
             fetchTransactions();
+            loadSavingsHistory(); // always refresh savings when tab opens
         }
-        if (tab == 4) { loadEarnTab(); }
         if (tab == 5) { refreshProfileUI(); loadProfilePhoto(); }
     }
 
@@ -2454,115 +2854,296 @@ public class MainActivity extends Activity {
         tvEarnClaimable = findViewById(R.id.tvEarnClaimable);
         findViewById(R.id.btnRefreshTasks).setOnClickListener(v -> loadEarnTab());
         findViewById(R.id.btnClaimRewards).setOnClickListener(v -> claimRewards());
+        initReferralSection();
+    }
+
+    // ==================== REFERRAL SYSTEM ====================
+
+    private TextView tvReferralLink, tvReferralCount, tvReferralEarnings, tvReferralReward;
+
+    private void initReferralSection() {
+        tvReferralLink = findViewById(R.id.tvReferralLink);
+        tvReferralCount = findViewById(R.id.tvReferralCount);
+        tvReferralEarnings = findViewById(R.id.tvReferralEarnings);
+        tvReferralReward = findViewById(R.id.tvReferralReward);
+
+        // Generate or load referral code
+        String phone = prefs().getString("phone", "");
+        if (!phone.isEmpty()) {
+            String refCode = prefs().getString("referral_code", "");
+            if (refCode.isEmpty()) {
+                // Generate referral code from phone
+                refCode = phone.replaceAll("[^0-9]", "");
+                if (refCode.length() > 6) refCode = refCode.substring(refCode.length() - 6);
+                refCode = "DS" + refCode;
+                prefs().edit().putString("referral_code", refCode).apply();
+            }
+            String referralLink = "https://datasaver.app/ref/" + refCode;
+            tvReferralLink.setText(referralLink);
+            tvReferralLink.setOnLongClickListener(v -> {
+                copyToClipboard(referralLink);
+                Toast.makeText(MainActivity.this, "Referral link copied!", Toast.LENGTH_SHORT).show();
+                return true;
+            });
+        }
+
+        // Share button
+        findViewById(R.id.btnShareReferral).setOnClickListener(v -> {
+            String link = tvReferralLink.getText().toString();
+            if (link.startsWith("Generating")) {
+                Toast.makeText(MainActivity.this, "Please login first", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("text/plain");
+            shareIntent.putExtra(Intent.EXTRA_TEXT,
+                "Save your mobile data with DataSaver! Block ads, save up to 50% data.\n\n"
+                + "Download now: " + link + "\n\n"
+                + "Use my link and we both earn rewards! \uD83D\uDE80");
+            startActivity(Intent.createChooser(shareIntent, "Share your referral link"));
+        });
+
+        // Load referral stats
+        loadReferralStats();
+    }
+
+    private void loadReferralStats() {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                URL url = new URL(SERVER_URL + "/api/referrals/stats?phone=" + phone);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(15000);
+                if (conn.getResponseCode() != 200) return;
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONObject res = new JSONObject(sb.toString());
+                int count = res.optInt("referral_count", 0);
+                int earnings = res.optInt("total_earnings", 0);
+                int rewardPerRef = res.optInt("reward_per_referral", 500);
+                handler.post(() -> {
+                    tvReferralCount.setText(String.valueOf(count));
+                    tvReferralEarnings.setText("\u20a6" + earnings);
+                    tvReferralReward.setText("Up to \u20a6" + rewardPerRef + "/referral");
+                });
+            } catch (Exception e) {
+                // Silently fail — stats will show 0
+            }
+        }).start();
+    }
+
+    private void copyToClipboard(String text) {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("referral", text));
     }
 
     private void loadEarnTab() {
+        loadEarnTabWithRetry(0);
+    }
+
+    private void loadEarnTabWithRetry(int attempt) {
         if (earnTasksContainer == null) initEarnTab();
         earnTasksContainer.removeAllViews();
-        tvNoTasks.setText("Loading tasks...");
+        tvNoTasks.setText(attempt > 0 ? "Connecting..." : "Loading tasks...");
         tvNoTasks.setVisibility(View.VISIBLE);
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) { tvNoTasks.setText("Login to see tasks"); return; }
 
-        // Fetch tasks and user rewards
         new Thread(() -> {
             try {
                 URL url = new URL(SERVER_URL + "/api/tasks?phone=" + phone);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(15000); conn.setReadTimeout(15000);
+                conn.setConnectTimeout(45000); conn.setReadTimeout(45000);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder(); String line;
                 while ((line = reader.readLine()) != null) sb.append(line);
                 reader.close();
                 JSONObject res = new JSONObject(sb.toString());
                 JSONArray tasks = res.optJSONArray("tasks");
+                JSONArray lockedTasks = res.optJSONArray("locked_tasks");
                 int pending = res.optInt("pending_reward", 0);
                 int claimable = res.optInt("claimable_reward", 0);
+                int hiddenCount = res.optInt("hidden_count", 0);
+                int dailyLimit = res.optInt("daily_limit", 2);
+                String serverPlan = res.optString("user_plan", "none");
                 handler.post(() -> {
                     tvEarnPending.setText("\u20a6" + pending);
                     tvEarnClaimable.setText("\u20a6" + claimable);
-                    showTasks(tasks);
+                    showTasks(tasks, lockedTasks, hiddenCount, dailyLimit, serverPlan);
                 });
             } catch (Exception e) {
-                handler.post(() -> { tvNoTasks.setText("Could not load tasks. Tap Refresh."); tvNoTasks.setVisibility(View.VISIBLE); });
+                if (attempt < 2) {
+                    handler.postDelayed(() -> loadEarnTabWithRetry(attempt + 1), 5000);
+                } else {
+                    handler.post(() -> { tvNoTasks.setText("Could not load tasks. Tap Refresh."); tvNoTasks.setVisibility(View.VISIBLE); });
+                }
             }
         }).start();
     }
 
-    private void showTasks(JSONArray tasks) {
+    private void showTasks(JSONArray tasks, JSONArray lockedTasks, int hiddenCount, int dailyLimit, String userPlan) {
         earnTasksContainer.removeAllViews();
-        if (tasks == null || tasks.length() == 0) {
-            tvNoTasks.setText("No tasks available right now. Check back later!");
-            tvNoTasks.setVisibility(View.VISIBLE);
-            return;
-        }
         tvNoTasks.setVisibility(View.GONE);
 
-        for (int i = 0; i < tasks.length(); i++) {
-            try {
-                JSONObject task = tasks.getJSONObject(i);
-                String id = task.optString("id");
-                String title = task.optString("title", "Task");
-                String type = task.optString("type", "general"); // video, follow, advert, youtube
-                int reward = task.optInt("reward", 0);
-                String rewardType = task.optString("reward_type", "airtime"); // airtime or data
-                String status = task.optString("user_status", "available"); // available, pending, approved
+        boolean hasTasks = tasks != null && tasks.length() > 0;
+        boolean hasLocked = lockedTasks != null && lockedTasks.length() > 0;
 
-                LinearLayout card = new LinearLayout(this);
-                card.setOrientation(LinearLayout.HORIZONTAL);
-                card.setBackground(getResources().getDrawable(R.drawable.card_bg));
-                card.setPadding(dp(14), dp(14), dp(14), dp(14));
-                card.setElevation(dp(3));
-                card.setGravity(Gravity.CENTER_VERTICAL);
-                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                cp.bottomMargin = dp(10);
-                card.setLayoutParams(cp);
-
-                // Type icon
-                TextView icon = new TextView(this);
-                String emoji = "\ud83d\udcf1";
-                if ("video".equals(type) || "youtube".equals(type)) emoji = "\ud83c\udfac";
-                else if ("follow".equals(type)) emoji = "\ud83d\udc65";
-                else if ("advert".equals(type)) emoji = "\ud83d\udcfa";
-                icon.setText(emoji);
-                icon.setTextSize(24);
-                icon.setPadding(0, 0, dp(12), 0);
-                card.addView(icon);
-
-                // Text
-                LinearLayout textCol = new LinearLayout(this);
-                textCol.setOrientation(LinearLayout.VERTICAL);
-                textCol.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-                TextView tvTitle = new TextView(this);
-                tvTitle.setText(title);
-                tvTitle.setTextSize(14); tvTitle.setTextColor(0xFF333333); tvTitle.setTypeface(null, Typeface.BOLD);
-                textCol.addView(tvTitle);
-                TextView tvReward = new TextView(this);
-                tvReward.setText("Earn \u20a6" + reward + " " + rewardType);
-                tvReward.setTextSize(12); tvReward.setTextColor(0xFF43A047);
-                textCol.addView(tvReward);
-                card.addView(textCol);
-
-                // Status/action
-                TextView tvStatus = new TextView(this);
-                tvStatus.setTextSize(11); tvStatus.setTypeface(null, Typeface.BOLD);
-                tvStatus.setPadding(dp(10), dp(6), dp(10), dp(6));
-                if ("pending".equals(status)) {
-                    tvStatus.setText("PENDING"); tvStatus.setTextColor(0xFFFF8F00); tvStatus.setBackgroundColor(0xFFFFF3E0);
-                } else if ("approved".equals(status)) {
-                    tvStatus.setText("CLAIM"); tvStatus.setTextColor(0xFFFFFFFF); tvStatus.setBackgroundColor(0xFF43A047);
-                } else if ("claimed".equals(status)) {
-                    tvStatus.setText("DONE \u2713"); tvStatus.setTextColor(0xFF43A047); tvStatus.setBackgroundColor(0xFFE8F5E9);
-                } else {
-                    tvStatus.setText("START"); tvStatus.setTextColor(0xFFFFFFFF); tvStatus.setBackgroundColor(0xFF1565C0);
-                    final JSONObject fTask = task;
-                    card.setOnClickListener(v -> showTaskDetail(fTask));
-                }
-                card.addView(tvStatus);
-                earnTasksContainer.addView(card);
-            } catch (Exception e) {}
+        // Daily limit info bar
+        String planLabel = userPlan.substring(0, 1).toUpperCase() + userPlan.substring(1);
+        TextView tvLimit = new TextView(this);
+        tvLimit.setTextSize(12);
+        tvLimit.setTextColor(0xFF666666);
+        tvLimit.setPadding(0, 0, 0, dp(8));
+        if ("none".equals(userPlan)) {
+            tvLimit.setText("Free plan: up to " + dailyLimit + " tasks/day. Upgrade to earn more!");
+        } else {
+            tvLimit.setText(planLabel + " plan: up to " + (dailyLimit == 999 ? "unlimited" : String.valueOf(dailyLimit)) + " tasks/day");
         }
+        earnTasksContainer.addView(tvLimit);
+
+        // No tasks for this user
+        if (!hasTasks) {
+            tvNoTasks.setVisibility(View.VISIBLE);
+            if ("none".equals(userPlan)) {
+                tvNoTasks.setText("No free tasks available today.");
+                // Upgrade button
+                Button upgradeBtn = new Button(this);
+                upgradeBtn.setText("Upgrade to see more tasks & earn bigger");
+                upgradeBtn.setTextColor(0xFFFFFFFF);
+                upgradeBtn.setBackground(getResources().getDrawable(R.drawable.btn_rounded));
+                upgradeBtn.setTextSize(13);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+                lp.topMargin = dp(8);
+                upgradeBtn.setLayoutParams(lp);
+                upgradeBtn.setOnClickListener(v -> switchTab(3));
+                earnTasksContainer.addView(upgradeBtn);
+            } else {
+                tvNoTasks.setText("No tasks available right now. Check back later!");
+            }
+        }
+
+        // Visible tasks
+        if (hasTasks) {
+            for (int i = 0; i < tasks.length(); i++) {
+                try { earnTasksContainer.addView(buildTaskCard(tasks.getJSONObject(i), false)); } catch (Exception e) {}
+            }
+        }
+
+        // Hidden count banner (tasks exist but daily limit hit)
+        if (hiddenCount > 0) {
+            TextView tvHidden = new TextView(this);
+            tvHidden.setText("+ " + hiddenCount + " more tasks available — upgrade to see them all");
+            tvHidden.setTextSize(12);
+            tvHidden.setTextColor(0xFFC62828);
+            tvHidden.setTypeface(null, android.graphics.Typeface.BOLD);
+            tvHidden.setPadding(0, dp(4), 0, dp(8));
+            tvHidden.setOnClickListener(v -> switchTab(3));
+            earnTasksContainer.addView(tvHidden);
+        }
+
+        // Locked tasks (require higher plan)
+        if (hasLocked) {
+            TextView tvLockedHeader = new TextView(this);
+            tvLockedHeader.setText("Locked Tasks — People are earning big!");
+            tvLockedHeader.setTextSize(13);
+            tvLockedHeader.setTypeface(null, android.graphics.Typeface.BOLD);
+            tvLockedHeader.setTextColor(0xFF333333);
+            tvLockedHeader.setPadding(0, dp(12), 0, dp(6));
+            earnTasksContainer.addView(tvLockedHeader);
+
+            for (int i = 0; i < lockedTasks.length(); i++) {
+                try { earnTasksContainer.addView(buildTaskCard(lockedTasks.getJSONObject(i), true)); } catch (Exception e) {}
+            }
+        }
+    }
+
+    private View buildTaskCard(JSONObject task, boolean locked) throws Exception {
+        String title = task.optString("title", "Task");
+        String type = task.optString("type", "general");
+        int reward = task.optInt("reward", 0);
+        String rewardType = task.optString("reward_type", "airtime");
+        String status = task.optString("user_status", "available");
+        String minPlan = task.optString("min_plan", "none");
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setBackground(getResources().getDrawable(R.drawable.card_bg));
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setElevation(dp(3));
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        if (locked) card.setAlpha(0.6f);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cp.bottomMargin = dp(10);
+        card.setLayoutParams(cp);
+
+        // Icon
+        TextView icon = new TextView(this);
+        String emoji = locked ? "\ud83d\udd12" : "\ud83d\udcf1";
+        if (!locked) {
+            if ("video".equals(type) || "youtube".equals(type)) emoji = "\ud83c\udfac";
+            else if ("follow".equals(type)) emoji = "\ud83d\udc65";
+            else if ("advert".equals(type)) emoji = "\ud83d\udcfa";
+        }
+        icon.setText(emoji);
+        icon.setTextSize(24);
+        icon.setPadding(0, 0, dp(12), 0);
+        card.addView(icon);
+
+        // Text
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        textCol.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText(locked ? title + " (Locked)" : title);
+        tvTitle.setTextSize(14);
+        tvTitle.setTextColor(0xFF333333);
+        tvTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+        textCol.addView(tvTitle);
+        TextView tvReward = new TextView(this);
+        tvReward.setText("Earn \u20a6" + reward + " " + rewardType);
+        tvReward.setTextSize(12);
+        tvReward.setTextColor(locked ? 0xFF999999 : 0xFF43A047);
+        textCol.addView(tvReward);
+        if (locked) {
+            String planLabel = minPlan.substring(0, 1).toUpperCase() + minPlan.substring(1);
+            TextView tvLock = new TextView(this);
+            tvLock.setText(planLabel + " plan required");
+            tvLock.setTextSize(11);
+            tvLock.setTextColor(0xFFC62828);
+            textCol.addView(tvLock);
+        }
+        card.addView(textCol);
+
+        // Action button
+        TextView tvAction = new TextView(this);
+        tvAction.setTextSize(11);
+        tvAction.setTypeface(null, android.graphics.Typeface.BOLD);
+        tvAction.setPadding(dp(10), dp(6), dp(10), dp(6));
+        if (locked) {
+            tvAction.setText("UPGRADE");
+            tvAction.setTextColor(0xFFFFFFFF);
+            tvAction.setBackgroundColor(0xFFC62828);
+            card.setOnClickListener(v -> switchTab(3));
+        } else if ("pending".equals(status)) {
+            tvAction.setText("PENDING"); tvAction.setTextColor(0xFFFF8F00); tvAction.setBackgroundColor(0xFFFFF3E0);
+        } else if ("approved".equals(status)) {
+            tvAction.setText("CLAIM"); tvAction.setTextColor(0xFFFFFFFF); tvAction.setBackgroundColor(0xFF43A047);
+        } else if ("claimed".equals(status)) {
+            tvAction.setText("DONE \u2713"); tvAction.setTextColor(0xFF43A047); tvAction.setBackgroundColor(0xFFE8F5E9);
+        } else {
+            tvAction.setText("START"); tvAction.setTextColor(0xFFFFFFFF); tvAction.setBackgroundColor(0xFFC62828);
+            final JSONObject fTask = task;
+            card.setOnClickListener(v -> showTaskDetail(fTask));
+        }
+        card.addView(tvAction);
+        return card;
     }
 
     private void showTaskDetail(JSONObject task) {
@@ -2665,7 +3246,7 @@ public class MainActivity extends Activity {
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Content-Type", "application/json");
-                conn.setConnectTimeout(30000); conn.setReadTimeout(30000);
+                conn.setConnectTimeout(45000); conn.setReadTimeout(45000);
                 conn.setDoOutput(true);
                 JSONObject body = new JSONObject();
                 body.put("phone", phone);
@@ -2710,7 +3291,7 @@ public class MainActivity extends Activity {
                         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                         conn.setRequestMethod("POST");
                         conn.setRequestProperty("Content-Type", "application/json");
-                        conn.setConnectTimeout(15000); conn.setReadTimeout(15000);
+                        conn.setConnectTimeout(45000); conn.setReadTimeout(45000);
                         conn.setDoOutput(true);
                         JSONObject body = new JSONObject();
                         body.put("phone", phone);
@@ -2753,21 +3334,19 @@ public class MainActivity extends Activity {
     private static final int VPN_REQUEST_CODE = 1002;
 
     private void toggle() {
-        if (DataSaverService.isRunning) {
+        if (DataSaverService.isRunning || DataSaverVpnService.isVpnRunning) {
             Intent i = new Intent(this, DataSaverService.class);
             i.setAction(DataSaverService.ACTION_STOP);
             startService(i);
-            // Stop VPN
             Intent vi = new Intent(this, DataSaverVpnService.class);
             vi.setAction("STOP");
             startService(vi);
             polling = false;
             handler.postDelayed(() -> updateUI(), 500);
         } else {
+            // Usage permission is optional — app still works without it (just no app breakdown)
             if (!hasUsagePermission()) {
-                tvAppUsageEmpty.setText("Permission required.\nFind 'DataSaver' and enable it.\nThen come back and tap the power button.");
-                startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
-                return;
+                tvAppUsageEmpty.setText("Tap here to grant permission for app usage breakdown (optional)");
             }
             // Request VPN permission
             Intent vpnIntent = android.net.VpnService.prepare(this);
@@ -2780,7 +3359,31 @@ public class MainActivity extends Activity {
     }
 
     private void startServices() {
-        // Request battery optimization exemption (critical for Xiaomi/Oppo/Tecno/Infinix)
+        try {
+            Intent i = new Intent(this, DataSaverService.class);
+            i.setAction(DataSaverService.ACTION_START);
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(i);
+            } else {
+                startService(i);
+            }
+            android.util.Log.d("DataSaver", "DataSaverService start failed: none");
+        } catch (Exception e) {
+            android.util.Log.e("DataSaver", "DataSaverService start failed: " + e.getMessage());
+        }
+        try {
+            startService(new Intent(this, DataSaverVpnService.class));
+        } catch (Exception e) {
+            android.util.Log.e("DataSaver", "VpnService start failed: " + e.getMessage());
+        }
+        polling = true;
+        handler.postDelayed(() -> pollUI(), 1000);
+        handler.postDelayed(() -> updateUI(), 500);
+        // Request battery optimization exemption AFTER services start, non-blocking
+        handler.postDelayed(() -> requestBatteryOptimizationExemption(), 3000);
+    }
+
+    private void requestBatteryOptimizationExemption() {
         if (Build.VERSION.SDK_INT >= 23) {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
             if (!pm.isIgnoringBatteryOptimizations(getPackageName())) {
@@ -2791,68 +3394,105 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {}
             }
         }
-        Intent i = new Intent(this, DataSaverService.class);
-        i.setAction(DataSaverService.ACTION_START);
-        if (android.os.Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(i);
-        } else {
-            startService(i);
-        }
-        // Start VPN simulation
-        startService(new Intent(this, DataSaverVpnService.class));
-        polling = true;
-        handler.postDelayed(() -> pollUI(), 1000);
-        handler.postDelayed(() -> updateUI(), 500);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        // Restore savings counters in case app was backgrounded
-        long savedAdBytes = prefs().getLong("real_ad_bytes", 0);
-        long savedBgBytes = prefs().getLong("real_bg_bytes", 0);
+        // Restore counters in case app was backgrounded
         long savedAdReqs = prefs().getLong("real_ad_requests", 0);
         long savedBgSyncs = prefs().getLong("real_bg_syncs", 0);
-        if (savedAdBytes > DataSaverVpnService.blockedAdBytes.get()) DataSaverVpnService.blockedAdBytes.set(savedAdBytes);
-        if (savedBgBytes > DataSaverVpnService.blockedBgBytes.get()) DataSaverVpnService.blockedBgBytes.set(savedBgBytes);
         if (savedAdReqs > DataSaverVpnService.blockedAdRequests.get()) DataSaverVpnService.blockedAdRequests.set(savedAdReqs);
         if (savedBgSyncs > DataSaverVpnService.blockedBgSyncs.get()) DataSaverVpnService.blockedBgSyncs.set(savedBgSyncs);
         updateUI();
         updateSummary();
         fetchWalletBalance();
         verifyPendingPayment();
-        if (DataSaverService.isRunning && !polling) {
+        updateNotifBadge();
+        // Check for new notifications when app comes to foreground
+        checkNotificationsOnResume();
+        if ((DataSaverService.isRunning || DataSaverVpnService.isVpnRunning) && !polling) {
             polling = true;
             handler.postDelayed(() -> pollUI(), 1000);
         }
     }
 
+    private void checkNotificationsOnResume() {
+        String phone = prefs().getString("phone", "");
+        if (phone.isEmpty()) return;
+        new Thread(() -> {
+            try {
+                long lastId = prefs().getLong("last_notif_id", 0);
+                URL url = new URL(SERVER_URL + "/api/notifications?phone=" + phone + "&since_id=" + lastId);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
+                if (conn.getResponseCode() != 200) return;
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+                reader.close();
+                JSONArray arr = new JSONArray(sb.toString());
+                if (arr.length() > 0) {
+                    long newLastId = lastId;
+                    for (int i = 0; i < arr.length(); i++) {
+                        long nid = arr.getJSONObject(i).optLong("id", 0);
+                        if (nid > newLastId) newLastId = nid;
+                    }
+                    int newCount = arr.length();
+                    DataSaverVpnService.unreadNotifCount += newCount;
+                    DataSaverVpnService.hasNewNotif = true;
+                    prefs().edit()
+                        .putLong("last_notif_id", newLastId)
+                        .putInt("unread_notif_count", DataSaverVpnService.unreadNotifCount)
+                        .apply();
+                    handler.post(() -> updateNotifBadge());
+                }
+            } catch (Exception e) {}
+        }).start();
+    }
+
     private void updateUI() {
-        if (DataSaverService.isRunning) {
+        boolean isOn = DataSaverService.isRunning || DataSaverVpnService.isVpnRunning;
+        if (isOn) {
             long ads = DataSaverVpnService.blockedAdRequests.get();
             long bgSyncs = DataSaverVpnService.blockedBgSyncs.get();
-            long totalSavedKB = (DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get()) / 1024;
+            long totalBlocked = ads + bgSyncs;
             String statusMsg = DataSaverVpnService.isVpnRunning ? "VPN Connected" : "Connected";
-            if (ads > 0 || bgSyncs > 0) {
-                statusMsg += " \u2014 Saved " + formatBytes(DataSaverVpnService.blockedAdBytes.get() + DataSaverVpnService.blockedBgBytes.get());
+            if (totalBlocked > 0) {
+                statusMsg += " \u2014 " + totalBlocked + " requests blocked";
             } else {
                 statusMsg += " \u2014 Protecting your data";
             }
             tvStatus.setText(statusMsg);
             btnConnect.setText("ON");
             btnConnect.setBackgroundResource(R.drawable.circle_on);
+            btnConnect.setTextColor(0xFFFFFFFF);
         } else {
             tvStatus.setText("Tap to connect");
             btnConnect.setText("OFF");
             btnConnect.setBackgroundResource(R.drawable.circle_off);
+            btnConnect.setTextColor(0xFFC62828);
         }
     }
 
     private void pollUI() {
         if (!polling) return;
+        // Auto-stop polling if both services have died
+        if (!DataSaverService.isRunning && !DataSaverVpnService.isVpnRunning) {
+            polling = false;
+            updateUI();
+            return;
+        }
         updateUI();
         updateSummary();
         updateAppCards();
+        updateNotifBadge();
+        // Persist unread count
+        if (DataSaverVpnService.unreadNotifCount > 0) {
+            prefs().edit().putInt("unread_notif_count", DataSaverVpnService.unreadNotifCount).apply();
+        }
         handler.postDelayed(() -> pollUI(), 2000);
     }
 
@@ -2884,30 +3524,37 @@ public class MainActivity extends Activity {
     }
 
     private void updateSummary() {
-        long totalAppData = 0;
-        for (long[] v : DataSaverService.appDataUsage.values()) totalAppData += v[0] + v[1];
+        // DATA USED — from Android NetworkStats (100% real)
+        long sessionRx = DataSaverService.totalBytesRx;
+        long sessionTx = DataSaverService.totalBytesTx;
+        long totalAppData = sessionRx + sessionTx;
+        if (totalAppData <= 0) {
+            for (Map.Entry<String, long[]> entry : DataSaverService.appDataUsage.entrySet()) {
+                String n = entry.getKey();
+                if (n.equals("Acorn Datasaver") || n.equals("DataSaver")) continue;
+                totalAppData += entry.getValue()[0] + entry.getValue()[1];
+            }
+        }
         if (totalAppData == 0) totalAppData = prefs().getLong("saved_totalRx", 0) + prefs().getLong("saved_totalTx", 0);
 
-        // Real savings: always use the HIGHER of SharedPreferences or live VPN counters
-        long spAdBytes = prefs().getLong("real_ad_bytes", 0);
-        long spBgBytes = prefs().getLong("real_bg_bytes", 0);
-        long spAdReqs = prefs().getLong("real_ad_requests", 0);
-        long spBgSyncs = prefs().getLong("real_bg_syncs", 0);
-        long liveAdBytes = DataSaverVpnService.blockedAdBytes.get();
-        long liveBgBytes = DataSaverVpnService.blockedBgBytes.get();
-        long liveAdReqs = DataSaverVpnService.blockedAdRequests.get();
-        long liveBgSyncs = DataSaverVpnService.blockedBgSyncs.get();
-        long realSaved = Math.max(spAdBytes + spBgBytes, liveAdBytes + liveBgBytes);
-        long realBlocked = Math.max(spAdReqs + spBgSyncs, liveAdReqs + liveBgSyncs);
-        // Never show saved > used
-        if (realSaved > totalAppData && totalAppData > 0) realSaved = (long)(totalAppData * 0.10);
-        double pct = totalAppData > 0 ? Math.min((realSaved * 100.0 / totalAppData), 99.9) : 0;
+        // REAL METRICS ONLY — no byte estimates
+        long adReqs = DataSaverVpnService.blockedAdRequests.get();
+        long bgSyncs = DataSaverVpnService.blockedBgSyncs.get();
+        long totalDns = DataSaverVpnService.totalDnsQueries.get();
+        long totalBlocked = adReqs + bgSyncs;
 
+        // Block rate — blocked DNS queries / total DNS queries (100% real)
+        double blockRate = totalDns > 0 ? (totalBlocked * 100.0 / totalDns) : 0;
+
+        // Show real metrics on dashboard
         tvUsed.setText(formatBytes(totalAppData));
-        tvSaved.setText(formatBytes(realSaved));
-        tvSavedPct.setText(String.format("%.1f%%", pct));
+        tvSaved.setText(String.valueOf(totalBlocked));
+        tvSavedPct.setText(String.format("%.1f%%", blockRate));
 
-        // Update summary label with context
+        // Update labels to show what these numbers mean
+        // (labels are set via layout XML, no dynamic update needed)
+
+        // Summary label
         TextView tvSummaryLabel = findViewById(R.id.tvSummaryLabel);
         if (tvSummaryLabel != null) {
             String period = "today".equals(usageFilter) ? "Today" : "week".equals(usageFilter) ? "This Week" : "This Month";
@@ -2920,24 +3567,104 @@ public class MainActivity extends Activity {
             }
         }
 
-        // Show naira value of real saved data
-        double nairaValue = bytesToNaira(realSaved);
-        if (tvSavedValue != null) tvSavedValue.setText("Worth " + formatNaira(nairaValue));
-
-        // Update real savings card
+        // Real Savings card — show real counts only
         TextView tvRealAds = findViewById(R.id.tvRealAdsBlocked);
         TextView tvRealData = findViewById(R.id.tvRealDataSaved);
         TextView tvRealMoney = findViewById(R.id.tvRealMoneySaved);
         if (tvRealAds != null) {
-            tvRealAds.setText(String.valueOf(realBlocked));
-            tvRealData.setText(formatBytes(realSaved));
-            tvRealMoney.setText(formatNaira(bytesToNaira(realSaved)));
+            tvRealAds.setText(String.valueOf(adReqs) + " ads");
+            tvRealData.setText(String.valueOf(bgSyncs) + " bg syncs");
+            tvRealMoney.setText(String.valueOf(totalDns) + " DNS queries");
         }
 
-        long usedBar = Math.max(totalAppData, 1);
-        long savedBar = Math.max(realSaved, 1);
-        barUsed.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) usedBar));
-        barSaved.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) savedBar));
+        // Upgrade banner for free users
+        String plan = prefs().getString("subscription_plan", "none");
+        if ("none".equals(plan)) {
+            showUpgradeBanner(blockRate, false);
+        } else {
+            hideUpgradeBanner();
+        }
+
+        // Bar chart — blocked vs total DNS queries
+        long totalBar = Math.max(totalDns, 1);
+        long blockedBar = Math.max(totalBlocked, 1);
+        barUsed.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) totalBar));
+        barSaved.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, (float) blockedBar));
+    }
+
+    private boolean upgradeBannerShown = false;
+    private boolean capPopupShown = false;
+
+    private void showUpgradeBanner(double savedNaira, boolean capHit) {
+        LinearLayout tabHome = findViewById(R.id.tabHome);
+        if (tabHome == null) return;
+
+        // Show cap popup once when limit is hit
+        // No cap popup - removed
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // Always show upgrade banner for free users
+        View existing = tabHome.findViewWithTag("upgrade_banner");
+        if (existing != null) {
+            // Update text only
+            TextView tv = existing.findViewWithTag("upgrade_banner_text");
+            if (tv != null) tv.setText("You saved " + formatNaira(savedNaira) + " free. Subscribe to save 5x more!");
+            return;
+        }
+
+        // Build banner
+        LinearLayout banner = new LinearLayout(this);
+        banner.setTag("upgrade_banner");
+        banner.setOrientation(LinearLayout.HORIZONTAL);
+        banner.setBackgroundColor(0xFF722F37);
+        banner.setPadding(dp(14), dp(10), dp(14), dp(10));
+        banner.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bp.setMargins(dp(16), dp(8), dp(16), 0);
+        banner.setLayoutParams(bp);
+        // Round corners via background
+        banner.setBackground(getResources().getDrawable(R.drawable.card_red));
+
+        TextView tv = new TextView(this);
+        tv.setTag("upgrade_banner_text");
+        tv.setText("You saved " + formatNaira(savedNaira) + " free. Subscribe to save 5x more!");
+        tv.setTextColor(0xFFFFFFFF);
+        tv.setTextSize(12);
+        tv.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        banner.addView(tv);
+
+        TextView btn = new TextView(this);
+        btn.setText("Upgrade");
+        btn.setTextColor(0xFFFFFFFF);
+        btn.setTextSize(11);
+        btn.setTypeface(null, android.graphics.Typeface.BOLD);
+        btn.setBackground(getResources().getDrawable(R.drawable.btn_white_rounded));
+        btn.setTextColor(0xFFC62828);
+        btn.setPadding(dp(10), dp(6), dp(10), dp(6));
+        btn.setOnClickListener(v -> switchTab(3));
+        banner.addView(btn);
+
+        // Insert after the Real Savings card (index 2 in tabHome)
+        tabHome.addView(banner, Math.min(3, tabHome.getChildCount()));
+    }
+
+    private void hideUpgradeBanner() {
+        LinearLayout tabHome = findViewById(R.id.tabHome);
+        if (tabHome == null) return;
+        View existing = tabHome.findViewWithTag("upgrade_banner");
+        if (existing != null) tabHome.removeView(existing);
     }
 
     private void updateAppCards() {
@@ -2998,34 +3725,38 @@ public class MainActivity extends Activity {
             textCol.addView(tvName);
 
             TextView tvUsage = new TextView(this);
-            tvUsage.setText("Used " + formatBytes(total));
+            tvUsage.setText("Used " + formatBytes(total) + "  â€¢  Tap for details");
             tvUsage.setTextSize(12);
             tvUsage.setTextColor(0xFF888888);
             textCol.addView(tvUsage);
 
             card.addView(textCol);
 
-            // Saved badge — show MB only, no percentage (real savings only from ad blocking)
-            long realAppSaved = DataSaverVpnService.blockedAdBytes.get();
-            if (realAppSaved > 0 && count == 0) {
-                // Only show total real savings on the top app
-                LinearLayout savedCol = new LinearLayout(this);
-                savedCol.setOrientation(LinearLayout.VERTICAL);
-                savedCol.setGravity(Gravity.END);
-                TextView tvS = new TextView(this);
-                tvS.setText(formatBytes(total));
-                tvS.setTextSize(12);
-                tvS.setTextColor(0xFF888888);
-                savedCol.addView(tvS);
-                card.addView(savedCol);
-            } else {
-                // Show usage amount
-                TextView tvAmt = new TextView(this);
-                tvAmt.setText(formatBytes(total));
-                tvAmt.setTextSize(12);
-                tvAmt.setTextColor(0xFF888888);
-                card.addView(tvAmt);
+            // Per-app blocked count from VPN tracking (real)
+            long appBlocked = 0;
+            if (DataSaverVpnService.perAppBlockedCount.containsKey(entry.getKey())) {
+                appBlocked = DataSaverVpnService.perAppBlockedCount.get(entry.getKey()).get();
             }
+
+            // Right column: usage + blocked
+            LinearLayout savedCol = new LinearLayout(this);
+            savedCol.setOrientation(LinearLayout.VERTICAL);
+            savedCol.setGravity(Gravity.END);
+
+            TextView tvUsedAmt = new TextView(this);
+            tvUsedAmt.setText(formatBytes(total));
+            tvUsedAmt.setTextSize(12);
+            tvUsedAmt.setTextColor(0xFF888888);
+            savedCol.addView(tvUsedAmt);
+
+            if (appBlocked > 0) {
+                TextView tvS = new TextView(this);
+                tvS.setText(appBlocked + " blocked");
+                tvS.setTextSize(10);
+                tvS.setTextColor(0xFF43A047);
+                savedCol.addView(tvS);
+            }
+            card.addView(savedCol);
 
             final String appNameFinal = entry.getKey();
             final long fRx = rx, fTx = tx, fSaved = saved;
@@ -3037,11 +3768,11 @@ public class MainActivity extends Activity {
     }
 
     private void showAppDetail(String appName, long rx, long tx, long saved) {
-        String plan = prefs().getString("subscription_plan", "basic");
-        if ("basic".equals(plan)) {
+        String plan = prefs().getString("subscription_plan", "none");
+        if ("none".equals(plan)) {
             new AlertDialog.Builder(this)
                 .setTitle("Premium Feature")
-                .setMessage("Detailed app analytics is available for Premium subscribers and above.\n\nUpgrade your plan to see download/upload breakdown, daily usage charts, and savings value for each app.")
+                .setMessage("Tap any app to see detailed usage breakdown.\n\nUpgrade to Premium to unlock full analytics: daily charts, savings per app, and more.")
                 .setPositiveButton("View Plans", (d, w) -> switchTab(2))
                 .setNegativeButton("Later", null)
                 .show();
@@ -3049,8 +3780,11 @@ public class MainActivity extends Activity {
         }
 
         long total = rx + tx;
-        double pct = total > 0 ? (saved * 100.0 / total) : 0;
-        double nairaValue = bytesToNaira(saved);
+        // Real per-app blocked count from VPN
+        long appBlocked = 0;
+        if (DataSaverVpnService.perAppBlockedCount.containsKey(appName)) {
+            appBlocked = DataSaverVpnService.perAppBlockedCount.get(appName).get();
+        }
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -3060,8 +3794,7 @@ public class MainActivity extends Activity {
             {"Downloaded", formatBytes(rx)},
             {"Uploaded", formatBytes(tx)},
             {"Total Used", formatBytes(total)},
-            {"Data Saved", formatBytes(saved)},
-            {"Value Saved", formatNaira(nairaValue)},
+            {"Ads Blocked", String.valueOf(appBlocked)},
         };
         for (String[] r : rows) {
             LinearLayout row = new LinearLayout(this);
@@ -3070,7 +3803,7 @@ public class MainActivity extends Activity {
             TextView l = new TextView(this); l.setText(r[0]); l.setTextSize(14); l.setTextColor(0xFF888888);
             l.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             TextView v = new TextView(this); v.setText(r[1]); v.setTextSize(14); v.setTextColor(0xFF333333); v.setTypeface(null, Typeface.BOLD);
-            if (r[0].equals("Value Saved")) { v.setTextColor(0xFF43A047); v.setTextSize(16); }
+            if (r[0].equals("Ads Blocked")) { v.setTextColor(0xFF43A047); v.setTextSize(16); }
             row.addView(l); row.addView(v);
             layout.addView(row);
         }
@@ -3086,7 +3819,7 @@ public class MainActivity extends Activity {
         // Bar chart title
         TextView chartTitle = new TextView(this);
         chartTitle.setText("Last 7 Days");
-        chartTitle.setTextSize(13); chartTitle.setTextColor(0xFF1565C0); chartTitle.setTypeface(null, Typeface.BOLD);
+        chartTitle.setTextSize(13); chartTitle.setTextColor(0xFFC62828); chartTitle.setTypeface(null, Typeface.BOLD);
         chartTitle.setPadding(0, 0, 0, dp(8));
         layout.addView(chartTitle);
 
@@ -3143,7 +3876,7 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(dp(20), barHeight);
             bp.bottomMargin = dp(2);
             bar.setLayoutParams(bp);
-            bar.setBackgroundColor(i == 6 ? 0xFF1565C0 : 0xFF90CAF9);
+            bar.setBackgroundColor(i == 6 ? 0xFFC62828 : 0xFF90CAF9);
             col.addView(bar);
 
             // Amount label
@@ -3214,7 +3947,7 @@ public class MainActivity extends Activity {
         android.graphics.Paint bg = new android.graphics.Paint();
         bg.setAntiAlias(true);
         // Pick color based on name hash
-        int[] colors = {0xFF1565C0, 0xFF43A047, 0xFFE65100, 0xFF6A1B9A, 0xFFD32F2F, 0xFF00838F};
+        int[] colors = {0xFFC62828, 0xFF43A047, 0xFFE65100, 0xFF6A1B9A, 0xFFC62828, 0xFF00838F};
         bg.setColor(colors[Math.abs(name.hashCode()) % colors.length]);
         c.drawCircle(size / 2f, size / 2f, size / 2f, bg);
         android.graphics.Paint txt = new android.graphics.Paint();
