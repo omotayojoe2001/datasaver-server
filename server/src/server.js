@@ -892,6 +892,96 @@ app.post('/api/tasks/claim', async (req, res) => {
   }
 });
 
+// ADMIN PANEL API (for admin-vercel)
+// Password check middleware
+const ADMIN_PW = process.env.ADMIN_PW || 'datasaver2024';
+const adminAuth = (req, res, next) => {
+  const pw = req.headers['x-admin-password'];
+  if (pw !== ADMIN_PW) {
+    return res.status(403).json({ error: 'Invalid admin password' });
+  }
+  next();
+};
+
+// Dashboard
+app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
+  try {
+    const { data: users } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
+    const { data: txns } = await supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(100);
+    const { data: savings } = await supabase.from('savings_history').select('*').order('created_at', { ascending: false });
+    
+    res.json({
+      totalUsers: users?.length || 0,
+      recentUsers: users?.slice(0, 5) || [],
+      recentTransactions: txns || [],
+      savingsHistory: savings || []
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Users
+app.get('/admin/api/users', adminAuth, async (req, res) => {
+  try {
+    const { page = 1, search = '' } = req.query;
+    const limit = 20;
+    let query = supabase.from('users').select('*', { count: 'exact' });
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
+    }
+    const { data, count, error } = query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ users: data || [], total: count || 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Transactions
+app.get('/admin/api/transactions', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(200);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ transactions: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Wallet transactions
+app.get('/admin/api/wallet/:phone', adminAuth, async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
+    if (!user) return res.json({ transactions: [] });
+    const { data, error } = await supabase.from('wallet_transactions').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ transactions: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update user wallet
+app.post('/admin/api/wallet/topup', adminAuth, async (req, res) => {
+  try {
+    const { phone, amount } = req.body;
+    const { data: user } = await supabase.from('users').select('*').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const newBalance = (parseFloat(user.wallet_balance) || 0) + parseFloat(amount);
+    await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
+    await supabase.from('wallet_transactions').insert({
+      user_id: user.id,
+      type: 'credit',
+      amount: parseFloat(amount),
+      description: 'Admin topup'
+    });
+    res.json({ success: true, new_balance: newBalance });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================
 // ADMIN PANEL (deployed separately via admin-vercel)
 // ============================================
