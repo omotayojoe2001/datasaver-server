@@ -956,12 +956,12 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
 // Users
 app.get('/admin/api/users', adminAuth, async (req, res) => {
   try {
-    // Simple test - return ALL users without any select columns
-    const result = await supabase.from('users').select('*');
-    console.log('Full select result:', result);
-    const users = result.data || [];
-    res.json({ users: users, total: users.length });
+    // Use EXACT same query as dashboard which works
+    const { data: users } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan, subscription_expires_at');
+    console.log('Users from same query as dashboard:', users?.length);
+    res.json({ users: users || [], total: users?.length || 0 });
   } catch (e) {
+    console.log('Exception:', e);
     res.status(500).json({ error: e.message });
   }
 });
