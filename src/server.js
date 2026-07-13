@@ -954,7 +954,7 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
 });
 
 // Users
-app.get('/admin/api/users', adminAuth, async (req, res) => {
+app.get('/admin/api/all-users', adminAuth, async (req, res) => {
   try {
     console.log('=== ADMIN USERS ENDPOINT CALLED ===');
     console.log('Query params:', req.query);
