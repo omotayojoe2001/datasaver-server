@@ -965,6 +965,63 @@ app.post('/api/tasks/create', adminAuth, async (req, res) => {
   }
 });
 
+// ADMIN SUBMISSIONS API (for admin panel)
+// Get all task submissions
+app.get('/api/submissions', adminAuth, async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = supabase.from('task_submissions').select('*, tasks(title, reward, reward_type), users(phone, name)').order('created_at', { ascending: false });
+    if (status && status !== 'all') query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Approve submission
+app.post('/api/submissions/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: sub, error: subErr } = await supabase.from('task_submissions').select('*, tasks(reward, reward_type)').eq('id', id).single();
+    if (subErr || !sub) return res.status(404).json({ error: 'Submission not found' });
+    
+    await supabase.from('task_submissions').update({ status: 'approved' }).eq('id', id);
+    
+    // Credit user wallet
+    const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('id', sub.user_id).single();
+    if (user) {
+      const reward = sub.tasks?.reward || 0;
+      const newBalance = (parseFloat(user.wallet_balance) || 0) + reward;
+      await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
+      
+      // Log transaction
+      await supabase.from('wallet_transactions').insert({
+        user_id: user.id,
+        type: 'task_reward',
+        amount: reward,
+        description: 'Task reward: ' + (sub.tasks?.title || 'Task'),
+        status: 'completed'
+      });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reject submission
+app.post('/api/submissions/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await supabase.from('task_submissions').update({ status: 'rejected' }).eq('id', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ADMIN PANEL API (for admin-vercel)
 // Password check middleware
 const ADMIN_PW = process.env.ADMIN_PW || 'admin123';
