@@ -958,8 +958,9 @@ app.get('/admin/api/users', adminAuth, async (req, res) => {
   try {
     const { page = 1, search = '' } = req.query;
     const limit = 20;
-    // Get all users first to get total count
-    const { data: allUsers } = await supabase.from('users').select('id');
+    // Debug: check if supabase is working
+    const { data: allUsers, error: countError } = await supabase.from('users').select('id');
+    console.log('Users query result:', countError, 'count:', allUsers?.length);
     const totalCount = allUsers?.length || 0;
     
     // Get paginated users
@@ -968,9 +969,11 @@ app.get('/admin/api/users', adminAuth, async (req, res) => {
       query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
     }
     const { data, error } = query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
+    console.log('Paginated users:', error, 'count:', data?.length);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ users: data || [], total: totalCount });
   } catch (e) {
+    console.log('Users API error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
