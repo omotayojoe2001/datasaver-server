@@ -804,59 +804,38 @@ app.post('/api/wallet/topup', async (req, res) => {
 // TASKS & EARN
 // ============================================
 
-// GET /api/tasks?phone=xxx — list tasks + user's status on each
-// GET /api/tasks?phone=xxx â€” list tasks filtered by plan level
-app.get('/api/tasks', async (req, res) => {
-  const { phone } = req.query;
-  const PLAN_LEVEL = { none: 0, premium: 1, professional: 2, enterprise: 3 };
-  const DAILY_TASK_LIMITS = { none: 0, premium: 5, professional: 8, enterprise: 999 };
+// MORE SPECIFIC TASK ROUTES (must come BEFORE /api/tasks)
+// GET /api/tasks/all — admin: get all tasks
+app.get('/api/tasks/all', adminAuth, async (req, res) => {
   try {
-    const { data: allTasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
-    let pending_reward = 0, claimable_reward = 0;
-    let userPlan = 'none';
-    const subMap = {};
-
-    if (phone) {
-      const { data: user } = await supabase.from('users').select('id, subscription_plan').eq('phone', phone).single();
-      if (user) {
-        userPlan = user.subscription_plan || 'none';
-        const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
-        if (submissions) {
-          for (const s of submissions) {
-            subMap[s.task_id] = s.status;
-            if (s.status === 'pending') pending_reward += s.reward || 0;
-            if (s.status === 'approved') claimable_reward += s.reward || 0;
-          }
-        }
-      }
-    }
-
-    const userLevel = PLAN_LEVEL[userPlan] ?? 0;
-    const dailyLimit = DAILY_TASK_LIMITS[userPlan] ?? 2;
-    const visibleTasks = [];
-    const lockedTasks = [];
-
-    for (const t of (allTasks || [])) {
-      const taskMinPlan = t.min_plan || 'none';
-      const taskLevel = PLAN_LEVEL[taskMinPlan] ?? 0;
-      t.user_status = subMap[t.id] || 'available';
-      if (taskLevel <= userLevel) {
-        visibleTasks.push(t);
-      } else {
-        lockedTasks.push({ id: t.id, title: t.title, reward: t.reward, reward_type: t.reward_type, min_plan: taskMinPlan, locked: true });
-      }
-    }
-
-    const limitedTasks = visibleTasks.slice(0, dailyLimit);
-    const hiddenCount = Math.max(0, visibleTasks.length - dailyLimit);
-
-    res.json({ tasks: limitedTasks, locked_tasks: lockedTasks, hidden_count: hiddenCount, daily_limit: dailyLimit, user_plan: userPlan, pending_reward, claimable_reward });
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/tasks/submit  { phone, task_id, proof_base64 }
+// POST /api/tasks/create — admin: create task
+app.post('/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title, description, reward, reward_type: reward_type || 'airtime',
+      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
+      proof_required: proof_required || false, active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// TASKS & EARN
 app.post('/api/tasks/submit', async (req, res) => {
   const { phone, task_id, proof_base64 } = req.body;
   if (!phone || !task_id) return res.status(400).json({ error: 'phone and task_id required' });
@@ -929,37 +908,52 @@ app.post('/api/tasks/claim', async (req, res) => {
   }
 });
 
-// ADMIN TASKS API
-// Get all tasks (admin)
-app.get('/api/tasks/all', adminAuth, async (req, res) => {
+// GET /api/tasks?phone=xxx — list tasks + user's status on each (general - must be last)
+app.get('/api/tasks', async (req, res) => {
+  const { phone } = req.query;
+  const PLAN_LEVEL = { none: 0, premium: 1, professional: 2, enterprise: 3 };
+  const DAILY_TASK_LIMITS = { none: 0, premium: 5, professional: 8, enterprise: 999 };
   try {
-    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+    const { data: allTasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
+    let pending_reward = 0, claimable_reward = 0;
+    let userPlan = 'none';
+    const subMap = {};
 
-// Create task (admin)
-app.post('/api/tasks/create', adminAuth, async (req, res) => {
-  try {
-    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
-    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
-    
-    const { data, error } = await supabase.from('tasks').insert({
-      title,
-      description: description || '',
-      reward: parseInt(reward),
-      reward_type: reward_type || 'airtime',
-      min_plan: min_plan || 'none',
-      daily_limit: parseInt(daily_limit) || 10,
-      proof_required: proof_required !== false,
-      active: active !== false
-    }).select().single();
-    
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+    if (phone) {
+      const { data: user } = await supabase.from('users').select('id, subscription_plan').eq('phone', phone).single();
+      if (user) {
+        userPlan = user.subscription_plan || 'none';
+        const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
+        if (submissions) {
+          for (const s of submissions) {
+            subMap[s.task_id] = s.status;
+            if (s.status === 'pending') pending_reward += s.reward || 0;
+            if (s.status === 'approved') claimable_reward += s.reward || 0;
+          }
+        }
+      }
+    }
+
+    const userLevel = PLAN_LEVEL[userPlan] ?? 0;
+    const dailyLimit = DAILY_TASK_LIMITS[userPlan] ?? 2;
+    const visibleTasks = [];
+    const lockedTasks = [];
+
+    for (const t of (allTasks || [])) {
+      const taskMinPlan = t.min_plan || 'none';
+      const taskLevel = PLAN_LEVEL[taskMinPlan] ?? 0;
+      t.user_status = subMap[t.id] || 'available';
+      if (taskLevel <= userLevel) {
+        visibleTasks.push(t);
+      } else {
+        lockedTasks.push({ id: t.id, title: t.title, reward: t.reward, reward_type: t.reward_type, min_plan: taskMinPlan, locked: true });
+      }
+    }
+
+    const limitedTasks = visibleTasks.slice(0, dailyLimit);
+    const hiddenCount = Math.max(0, visibleTasks.length - dailyLimit);
+
+    res.json({ tasks: limitedTasks, locked_tasks: lockedTasks, hidden_count: hiddenCount, daily_limit: dailyLimit, user_plan: userPlan, pending_reward, claimable_reward });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
