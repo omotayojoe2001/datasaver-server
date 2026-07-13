@@ -22,63 +22,11 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============================================
-// FIREBASE ADMIN (for push notifications)
+// FIREBASE ADMIN (for push notifications) - TEMPORARILY DISABLED
 // ============================================
-let admin = null;
-try {
-    // Service account from env var or use hardcoded credentials
-    const serviceAccount = {
-        type: "service_account",
-        project_id: process.env.FIREBASE_PROJECT_ID || "acorn-data-saver-app",
-        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID || "f05df96b87cc198ec8334e0a6309c5dac14ec12a",
-        private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\n/g, '
-') : "-----BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCoxJfk+PiBMr1g
-DHwd2lMmDPEdN12ynJ+5QIGgoKQT13z2R25/V64gwUyHabblPikfBgpLTmtso4PW
-V8bX1boW9WzINxPxnSLBmt186J7Eu1aZ5jwhcsVgXlrq1uPV9D29habUCWteAJfV
-Ycb0itN+D1M3OJWAXX3hFqJfdQ9MO8LciD+w0AGV0sXbjYmKlqyvBM0h8SyYXDBS
-/srSIHWQI1TapoyP3krp3GIVzqLbwEdRsXQeZvoAxF8B87CK9gkfLFIbOQrJB9ST
-qspmJIxWZ6LiacPncRcmhaDM91cUrMtQrALKsXHwNrQ3fJZZQF/T31shykNMyfpj
-30p+Yb/lAgMBAAECggEAICR3IG0ZmTOydSNTlTTyXp4a4ttbXUvusK/cMF0/+qZx
-Ho+quBaZK5RdELI92unMl6PFHKQWGhYHYzCLBqrmOv6ppfU1d3AbwT9PPT2plWLv
-oraCj8VF2a2Gx9C/Ck3u31Rf2mTj3b6jrEhnxcXV812UVgFRGeZUdeTjbmZDUFuG
-/j0PxCNFYmPo+RGpONd2aM2qdZ23mBuiMI3v0dJLvFifAPbqyvd/WjZuDYhGsk+x
-voF7GCqYP6S2tPN8HPPA+AYVHACL7mnGN6Ajy2edjwkix/pDIFcNRVL9rcRja2VM
-rHKkSst9VtoFuRJfzbRSIukB9NQdRRzTxM7G2wep4QKBgQDgrYAreQ4bYMYIzd0I
-sGLGIstlErC/qE0VEDUjIXiloXjkNXCac9kBt/Ij8JGJOLcYh5FGUfg4nQYe1rsy
-XfgR/xPoqavSHx8Uxynf/FdjwUwb+t0DkaD/VvcUc4+iLcipnig4WWBX1Ki0x4hR
-ffU3HtW5UhSmZ56oTzK7ptPWRQKBgQDAS7vuOrMoQuXvvTX4kE/XGSrDGkG6jlrv
-l2N+EfErhYuE7D0AQjGnEy9xZ90VUVY07E0IN1jbkNCF4PXisO9s5zXA9n/At52o
-3ZtO+P5RBRPcKXkXJDYGcP7YYnLYR+dgO3FnYYNjvdj7CofPUAC8oBLRcaY9F/2p
-rQvvpdUtIQKBgB10oakRZdgRB+V/l8rb1RdE2IWXvbRizDhGt7CzYq3UTZUdrHWT
-Wo/vHb+4elwTI24D1/fwJyrE61h/rmscBrnVRzbph600h06iDctfudVKMkA402D0
-ZrcTH7F+tQX+GqCiK4O3s/nP145b2nNUoCFp2XtCV5K5YwON3ojbhkpBAoGBAIat
-hDXZjtjH4dsCneY0zHZN/hEfNqG+Sho74UbOsiZVJd42xpKDydrGKRg4MjNYABSY
-22rBuM4uopzhbdUTLt0LIi6/dcI314gJjVjGMvfzonEz6sc2aVAhm5tZeC3aTkar
-20UYmrkkoe9Q9MVRtvJk+kkOW+u1/cb0l8OEVcWBAoGBAJ9duMgPs792CIzkjXuT
-80nq4zbv7aCnrNwA2GIgNY0+VuLlHKQBEKxwy9p1N0PeKECHRaH9WOw5DEENJvfl
-6G6rQqg0iwuQwerE+5fP806Q3pQU7VbfZIWJ38iqVsrXRUX7gaq5qVdXN2QMW31r
-K5r1CLmq7qjQNMU9uQrRdQrH
------END PRIVATE KEY-----",
-        client_email: process.env.FIREBASE_CLIENT_EMAIL || "firebase-adminsdk-fbsvc@acorn-data-saver-app.iam.gserviceaccount.com",
-        client_id: process.env.FIREBASE_CLIENT_ID || "105810181148629024912",
-        auth_uri: "https://accounts.google.com/o/oauth2/auth",
-        token_uri: "https://oauth2.googleapis.com/token",
-        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-        client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40acorn-data-saver-app.iam.gserviceaccount.com"
-    };
-    if (serviceAccount.private_key && serviceAccount.client_email) {
-        admin = require('firebase-admin');
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
-        console.log('Firebase Admin initialized');
-    } else {
-        console.log('Firebase credentials not configured - push notifications disabled');
-    }
-} catch (e) {
-    console.log('Firebase init failed:', e.message);
-}
+// let admin = null;
+// Firebase init disabled due to syntax error - will fix later
+console.log('Firebase push notifications temporarily disabled');
 
 // DataStation API config
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
