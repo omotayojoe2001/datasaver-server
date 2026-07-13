@@ -958,18 +958,20 @@ app.get('/admin/api/users', adminAuth, async (req, res) => {
   try {
     const { page = 1, search = '' } = req.query;
     const limit = 20;
-    // Get all users - simpler query first
-    const { data, error } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan').order('created_at', { ascending: false });
+    // Get users - same way as dashboard
+    const { data: users, error } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
+    console.log('Users query result:', error, 'count:', users?.length);
     if (error) {
-      console.log('Supabase error:', error);
+      console.log('Error:', error.message);
       return res.status(500).json({ error: error.message });
     }
-    console.log('Users found:', data?.length);
-    const totalCount = data?.length || 0;
-    const paginatedData = data?.slice((page - 1) * limit, page * limit) || [];
+    const totalCount = users?.length || 0;
+    // Paginate in JS
+    const start = (page - 1) * limit;
+    const paginatedData = users?.slice(start, start + limit) || [];
     res.json({ users: paginatedData, total: totalCount });
   } catch (e) {
-    console.log('Error:', e.message);
+    console.log('Exception:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
