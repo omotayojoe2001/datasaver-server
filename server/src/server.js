@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config(); // Load environment variables
 const express = require('express');
 const sharp = require('sharp');
 const compression = require('compression');
@@ -8,6 +8,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Task endpoints: /api/tasks, /api/tasks/all, /api/tasks/create
 
 app.use(cors());
 // Increase JSON body limit for proof uploads
