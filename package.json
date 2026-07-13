@@ -2,9 +2,9 @@
   "name": "datasaver-server",
   "version": "1.0.0",
   "description": "Data compression proxy server",
-  "main": "server/src/server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server/src/server.js"
+    "start": "node src/server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",
