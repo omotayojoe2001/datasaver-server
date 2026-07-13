@@ -254,19 +254,27 @@ app.post('/api/user/update', async (req, res) => {
 });
 
 // POST /api/savings/sync  { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes }
+// Uses MAX - keeps highest value received (to handle duplicate syncs)
 app.post('/api/savings/sync', async (req, res) => {
   const { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes } = req.body;
   if (!phone) return res.status(400).json({ error: 'phone required' });
   try {
-    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    // Get current user data first
+    const { data: user, error: userErr } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests, ad_bytes_saved, bg_bytes_saved').eq('phone', phone).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
 
-    // Update user totals
+    // Use MAX - keep highest value (handles duplicate syncs during session)
+    const newTotalSaved = Math.max(user.total_saved_bytes || 0, saved_bytes || 0);
+    const newTotalBlocked = Math.max(user.total_blocked_requests || 0, blocked_requests || 0);
+    const newAdBytes = Math.max(user.ad_bytes_saved || 0, ad_bytes || 0);
+    const newBgBytes = Math.max(user.bg_bytes_saved || 0, bg_bytes || 0);
+
+    // Update user with max values
     await supabase.from('users').update({
-      total_saved_bytes: saved_bytes || 0,
-      total_blocked_requests: blocked_requests || 0,
-      ad_bytes_saved: ad_bytes || 0,
-      bg_bytes_saved: bg_bytes || 0,
+      total_saved_bytes: newTotalSaved,
+      total_blocked_requests: newTotalBlocked,
+      ad_bytes_saved: newAdBytes,
+      bg_bytes_saved: newBgBytes,
       last_savings_sync: new Date().toISOString()
     }).eq('id', user.id);
 
