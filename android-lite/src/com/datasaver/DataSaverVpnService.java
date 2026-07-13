@@ -44,12 +44,12 @@ public class DataSaverVpnService extends VpnService {
 
     private static final String TAG = "DataSaverVPN";
     private static final String CHANNEL_ID = "datasaver_vpn";
-    private static final String NOTIF_CHANNEL_ID = "datasaver_push";
+    private static final String NOTIF_CHANNEL_ID = "datasaver_push_v2";
     private static final int NOTIF_ID = 2;
     private static final int LOG_PORT = 8080;
     private static final int MAX_LOG_ENTRIES = 500;
     private static final String SERVER_URL = "https://datasaver-server.onrender.com";
-    private static final long NOTIF_POLL_INTERVAL = 120000; // 2 minutes
+    private static final long NOTIF_POLL_INTERVAL = 30000; // 30 seconds for faster notification delivery
 
     // Push notification state
     public static volatile int unreadNotifCount = 0;
@@ -126,10 +126,33 @@ public class DataSaverVpnService extends VpnService {
         // Enforce image quality by plan
         enforceImageQualityByPlan();
         buildSystemWhitelist();
+        
+        // Restore persisted counters from previous session
         restoreSavings();
+        
+        // Check if we need to reset for a new day
+        String today = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date());
+        if (!today.equals(currentSavingsDate) && !currentSavingsDate.isEmpty()) {
+            // New day - reset counters but keep the persisted data structure
+            blockedAdRequests.set(0);
+            blockedBgSyncs.set(0);
+            totalDnsQueries.set(0);
+            totalPacketsProcessed.set(0);
+            perAppBlockedCount.clear();
+        }
+        currentSavingsDate = today;
         checkDailyReset();
         createNotificationChannel();
         startForeground(NOTIF_ID, buildNotification());
+        
+        // Save counters periodically - start a background thread
+        new Thread(() -> {
+            while (running) {
+                try { Thread.sleep(10000); } catch (Exception e) {}
+                if (running) saveCounters();
+            }
+        }, "CounterSaver").start();
+        
         // Load ad block list in background — don't block VPN startup on slow phones
         new Thread(this::loadAdBlockList, "AdBlockLoader").start();
 
@@ -578,7 +601,9 @@ public class DataSaverVpnService extends VpnService {
             if (phone.isEmpty()) return;
             long totalBlocked = blockedAdRequests.get() + blockedBgSyncs.get();
             long totalDns = totalDnsQueries.get();
-            // Fire and forget — only send real counts
+            // Calculate saved bytes: 5KB per blocked request (conservative estimate)
+            long savedBytes = totalBlocked * 5 * 1024;
+            // Fire and forget — send all data
             new Thread(() -> {
                 try {
                     java.net.URL url = new java.net.URL("https://datasaver-server.onrender.com/api/savings/sync");
@@ -590,6 +615,7 @@ public class DataSaverVpnService extends VpnService {
                     conn.setDoOutput(true);
                     String body = "{\"phone\":\"" + phone + "\""
                         + ",\"blocked_requests\":" + totalBlocked
+                        + ",\"saved_bytes\":" + savedBytes
                         + ",\"total_dns\":" + totalDns + "}";
                     conn.getOutputStream().write(body.getBytes());
                     conn.getOutputStream().close();
@@ -788,9 +814,28 @@ public class DataSaverVpnService extends VpnService {
         }
         currentSavingsDate = today;
     }
+    
+    // Save counters to SharedPreferences for persistence
+    private void saveCounters() {
+        try {
+            SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
+            String today = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(new java.util.Date());
+            sp.edit()
+                .putLong("real_ad_requests", blockedAdRequests.get())
+                .putLong("real_bg_syncs", blockedBgSyncs.get())
+                .putLong("real_total_dns", totalDnsQueries.get())
+                .putLong("real_total_packets", totalPacketsProcessed.get())
+                .putString("savings_date", today)
+                .apply();
+        } catch (Exception e) {}
+    }
 
     @Override
-    public void onDestroy() { stopVpn(); super.onDestroy(); }
+    public void onDestroy() { 
+        saveCounters(); // Save before destroying
+        stopVpn(); 
+        super.onDestroy(); 
+    }
 
     @Override
     public void onRevoke() { stopVpn(); super.onRevoke(); }
@@ -807,6 +852,12 @@ public class DataSaverVpnService extends VpnService {
                 NOTIF_CHANNEL_ID, "DataSaver Alerts", NotificationManager.IMPORTANCE_HIGH);
             pushCh.setDescription("Notifications from DataSaver");
             pushCh.enableVibration(true);
+            pushCh.setVibrationPattern(new long[]{0, 300, 200, 300});
+            pushCh.setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION),
+                new android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build());
             getSystemService(NotificationManager.class).createNotificationChannel(pushCh);
         }
     }
@@ -840,7 +891,8 @@ public class DataSaverVpnService extends VpnService {
                         Notification notif = nb
                             .setContentTitle("DataSaver is working")
                             .setContentText("Keep DataSaver running to block ads and save your data! \uD83D\uDCA1")
-                            .setSmallIcon(android.R.drawable.ic_dialog_info)
+                            .setSmallIcon(R.drawable.ic_notification)
+                            .setColor(0xFF2196F3)
                             .setAutoCancel(true)
                             .setContentIntent(pi)
                             .build();
@@ -947,8 +999,13 @@ public class DataSaverVpnService extends VpnService {
                 .setSmallIcon(icon)
                 .setAutoCancel(true)
                 .setContentIntent(pi)
+                .setVibrate(new long[]{0, 300, 200, 300})
+                .setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION))
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setCategory(Notification.CATEGORY_MESSAGE)
                 .build();
             nm.notify((int) notifId, notif);
+            Log.i(TAG, "Push notification shown: " + title + " (id=" + notifId + ")");
         } catch (Exception e) {
             Log.w(TAG, "Show notif error: " + e.getMessage());
         }

@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config(); // Load environment variables
 const express = require('express');
 const sharp = require('sharp');
 const compression = require('compression');
@@ -8,6 +8,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Task endpoints: /api/tasks, /api/tasks/all, /api/tasks/create, /admin/api/tasks/*
 
 app.use(cors());
 // Increase JSON body limit for proof uploads
@@ -25,18 +26,46 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // ============================================
 let admin = null;
 try {
-    // Service account from env var or Render secret
+    // Service account from env var or use hardcoded credentials
     const serviceAccount = {
         type: "service_account",
         project_id: process.env.FIREBASE_PROJECT_ID || "acorn-data-saver-app",
-        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-        private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
-        client_email: process.env.FIREBASE_CLIENT_EMAIL,
-        client_id: process.env.FIREBASE_CLIENT_ID,
+        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID || "f05df96b87cc198ec8334e0a6309c5dac14ec12a",
+        private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\n/g, '
+') : "-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCoxJfk+PiBMr1g
+DHwd2lMmDPEdN12ynJ+5QIGgoKQT13z2R25/V64gwUyHabblPikfBgpLTmtso4PW
+V8bX1boW9WzINxPxnSLBmt186J7Eu1aZ5jwhcsVgXlrq1uPV9D29habUCWteAJfV
+Ycb0itN+D1M3OJWAXX3hFqJfdQ9MO8LciD+w0AGV0sXbjYmKlqyvBM0h8SyYXDBS
+/srSIHWQI1TapoyP3krp3GIVzqLbwEdRsXQeZvoAxF8B87CK9gkfLFIbOQrJB9ST
+qspmJIxWZ6LiacPncRcmhaDM91cUrMtQrALKsXHwNrQ3fJZZQF/T31shykNMyfpj
+30p+Yb/lAgMBAAECggEAICR3IG0ZmTOydSNTlTTyXp4a4ttbXUvusK/cMF0/+qZx
+Ho+quBaZK5RdELI92unMl6PFHKQWGhYHYzCLBqrmOv6ppfU1d3AbwT9PPT2plWLv
+oraCj8VF2a2Gx9C/Ck3u31Rf2mTj3b6jrEhnxcXV812UVgFRGeZUdeTjbmZDUFuG
+/j0PxCNFYmPo+RGpONd2aM2qdZ23mBuiMI3v0dJLvFifAPbqyvd/WjZuDYhGsk+x
+voF7GCqYP6S2tPN8HPPA+AYVHACL7mnGN6Ajy2edjwkix/pDIFcNRVL9rcRja2VM
+rHKkSst9VtoFuRJfzbRSIukB9NQdRRzTxM7G2wep4QKBgQDgrYAreQ4bYMYIzd0I
+sGLGIstlErC/qE0VEDUjIXiloXjkNXCac9kBt/Ij8JGJOLcYh5FGUfg4nQYe1rsy
+XfgR/xPoqavSHx8Uxynf/FdjwUwb+t0DkaD/VvcUc4+iLcipnig4WWBX1Ki0x4hR
+ffU3HtW5UhSmZ56oTzK7ptPWRQKBgQDAS7vuOrMoQuXvvTX4kE/XGSrDGkG6jlrv
+l2N+EfErhYuE7D0AQjGnEy9xZ90VUVY07E0IN1jbkNCF4PXisO9s5zXA9n/At52o
+3ZtO+P5RBRPcKXkXJDYGcP7YYnLYR+dgO3FnYYNjvdj7CofPUAC8oBLRcaY9F/2p
+rQvvpdUtIQKBgB10oakRZdgRB+V/l8rb1RdE2IWXvbRizDhGt7CzYq3UTZUdrHWT
+Wo/vHb+4elwTI24D1/fwJyrE61h/rmscBrnVRzbph600h06iDctfudVKMkA402D0
+ZrcTH7F+tQX+GqCiK4O3s/nP145b2nNUoCFp2XtCV5K5YwON3ojbhkpBAoGBAIat
+hDXZjtjH4dsCneY0zHZN/hEfNqG+Sho74UbOsiZVJd42xpKDydrGKRg4MjNYABSY
+22rBuM4uopzhbdUTLt0LIi6/dcI314gJjVjGMvfzonEz6sc2aVAhm5tZeC3aTkar
+20UYmrkkoe9Q9MVRtvJk+kkOW+u1/cb0l8OEVcWBAoGBAJ9duMgPs792CIzkjXuT
+80nq4zbv7aCnrNwA2GIgNY0+VuLlHKQBEKxwy9p1N0PeKECHRaH9WOw5DEENJvfl
+6G6rQqg0iwuQwerE+5fP806Q3pQU7VbfZIWJ38iqVsrXRUX7gaq5qVdXN2QMW31r
+K5r1CLmq7qjQNMU9uQrRdQrH
+-----END PRIVATE KEY-----",
+        client_email: process.env.FIREBASE_CLIENT_EMAIL || "firebase-adminsdk-fbsvc@acorn-data-saver-app.iam.gserviceaccount.com",
+        client_id: process.env.FIREBASE_CLIENT_ID || "105810181148629024912",
         auth_uri: "https://accounts.google.com/o/oauth2/auth",
         token_uri: "https://oauth2.googleapis.com/token",
         auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-        client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
+        client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40acorn-data-saver-app.iam.gserviceaccount.com"
     };
     if (serviceAccount.private_key && serviceAccount.client_email) {
         admin = require('firebase-admin');
@@ -226,19 +255,27 @@ app.post('/api/user/update', async (req, res) => {
 });
 
 // POST /api/savings/sync  { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes }
+// Uses MAX - keeps highest value received (to handle duplicate syncs)
 app.post('/api/savings/sync', async (req, res) => {
   const { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes } = req.body;
   if (!phone) return res.status(400).json({ error: 'phone required' });
   try {
-    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    // Get current user data first
+    const { data: user, error: userErr } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests, ad_bytes_saved, bg_bytes_saved').eq('phone', phone).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
 
-    // Update user totals
+    // Use MAX - keep highest value (handles duplicate syncs during session)
+    const newTotalSaved = Math.max(user.total_saved_bytes || 0, saved_bytes || 0);
+    const newTotalBlocked = Math.max(user.total_blocked_requests || 0, blocked_requests || 0);
+    const newAdBytes = Math.max(user.ad_bytes_saved || 0, ad_bytes || 0);
+    const newBgBytes = Math.max(user.bg_bytes_saved || 0, bg_bytes || 0);
+
+    // Update user with max values
     await supabase.from('users').update({
-      total_saved_bytes: saved_bytes || 0,
-      total_blocked_requests: blocked_requests || 0,
-      ad_bytes_saved: ad_bytes || 0,
-      bg_bytes_saved: bg_bytes || 0,
+      total_saved_bytes: newTotalSaved,
+      total_blocked_requests: newTotalBlocked,
+      ad_bytes_saved: newAdBytes,
+      bg_bytes_saved: newBgBytes,
       last_savings_sync: new Date().toISOString()
     }).eq('id', user.id);
 
@@ -767,59 +804,68 @@ app.post('/api/wallet/topup', async (req, res) => {
 // TASKS & EARN
 // ============================================
 
-// GET /api/tasks?phone=xxx — list tasks + user's status on each
-// GET /api/tasks?phone=xxx â€” list tasks filtered by plan level
-app.get('/api/tasks', async (req, res) => {
-  const { phone } = req.query;
-  const PLAN_LEVEL = { none: 0, premium: 1, professional: 2, enterprise: 3 };
-  const DAILY_TASK_LIMITS = { none: 0, premium: 5, professional: 8, enterprise: 999 };
+// MORE SPECIFIC TASK ROUTES (must come BEFORE /api/tasks)
+// GET /api/tasks/all — admin: get all tasks
+app.get('/api/tasks/all', adminAuth, async (req, res) => {
   try {
-    const { data: allTasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
-    let pending_reward = 0, claimable_reward = 0;
-    let userPlan = 'none';
-    const subMap = {};
-
-    if (phone) {
-      const { data: user } = await supabase.from('users').select('id, subscription_plan').eq('phone', phone).single();
-      if (user) {
-        userPlan = user.subscription_plan || 'none';
-        const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
-        if (submissions) {
-          for (const s of submissions) {
-            subMap[s.task_id] = s.status;
-            if (s.status === 'pending') pending_reward += s.reward || 0;
-            if (s.status === 'approved') claimable_reward += s.reward || 0;
-          }
-        }
-      }
-    }
-
-    const userLevel = PLAN_LEVEL[userPlan] ?? 0;
-    const dailyLimit = DAILY_TASK_LIMITS[userPlan] ?? 2;
-    const visibleTasks = [];
-    const lockedTasks = [];
-
-    for (const t of (allTasks || [])) {
-      const taskMinPlan = t.min_plan || 'none';
-      const taskLevel = PLAN_LEVEL[taskMinPlan] ?? 0;
-      t.user_status = subMap[t.id] || 'available';
-      if (taskLevel <= userLevel) {
-        visibleTasks.push(t);
-      } else {
-        lockedTasks.push({ id: t.id, title: t.title, reward: t.reward, reward_type: t.reward_type, min_plan: taskMinPlan, locked: true });
-      }
-    }
-
-    const limitedTasks = visibleTasks.slice(0, dailyLimit);
-    const hiddenCount = Math.max(0, visibleTasks.length - dailyLimit);
-
-    res.json({ tasks: limitedTasks, locked_tasks: lockedTasks, hidden_count: hiddenCount, daily_limit: dailyLimit, user_plan: userPlan, pending_reward, claimable_reward });
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/tasks/submit  { phone, task_id, proof_base64 }
+// Also support /admin/api/tasks/all
+app.get('/admin/api/tasks/all', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/tasks/create — admin: create task
+app.post('/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title, description, reward, reward_type: reward_type || 'airtime',
+      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
+      proof_required: proof_required || false, active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Also support /admin/api/tasks/create
+app.post('/admin/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title, description, reward, reward_type: reward_type || 'airtime',
+      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
+      proof_required: proof_required || false, active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// TASKS & EARN
 app.post('/api/tasks/submit', async (req, res) => {
   const { phone, task_id, proof_base64 } = req.body;
   if (!phone || !task_id) return res.status(400).json({ error: 'phone and task_id required' });
@@ -892,6 +938,114 @@ app.post('/api/tasks/claim', async (req, res) => {
   }
 });
 
+// GET /api/tasks?phone=xxx — list tasks + user's status on each (general - must be last)
+app.get('/api/tasks', async (req, res) => {
+  const { phone } = req.query;
+  const PLAN_LEVEL = { none: 0, premium: 1, professional: 2, enterprise: 3 };
+  const DAILY_TASK_LIMITS = { none: 0, premium: 5, professional: 8, enterprise: 999 };
+  try {
+    const { data: allTasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
+    let pending_reward = 0, claimable_reward = 0;
+    let userPlan = 'none';
+    const subMap = {};
+
+    if (phone) {
+      const { data: user } = await supabase.from('users').select('id, subscription_plan').eq('phone', phone).single();
+      if (user) {
+        userPlan = user.subscription_plan || 'none';
+        const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
+        if (submissions) {
+          for (const s of submissions) {
+            subMap[s.task_id] = s.status;
+            if (s.status === 'pending') pending_reward += s.reward || 0;
+            if (s.status === 'approved') claimable_reward += s.reward || 0;
+          }
+        }
+      }
+    }
+
+    const userLevel = PLAN_LEVEL[userPlan] ?? 0;
+    const dailyLimit = DAILY_TASK_LIMITS[userPlan] ?? 2;
+    const visibleTasks = [];
+    const lockedTasks = [];
+
+    for (const t of (allTasks || [])) {
+      const taskMinPlan = t.min_plan || 'none';
+      const taskLevel = PLAN_LEVEL[taskMinPlan] ?? 0;
+      t.user_status = subMap[t.id] || 'available';
+      if (taskLevel <= userLevel) {
+        visibleTasks.push(t);
+      } else {
+        lockedTasks.push({ id: t.id, title: t.title, reward: t.reward, reward_type: t.reward_type, min_plan: taskMinPlan, locked: true });
+      }
+    }
+
+    const limitedTasks = visibleTasks.slice(0, dailyLimit);
+    const hiddenCount = Math.max(0, visibleTasks.length - dailyLimit);
+
+    res.json({ tasks: limitedTasks, locked_tasks: lockedTasks, hidden_count: hiddenCount, daily_limit: dailyLimit, user_plan: userPlan, pending_reward, claimable_reward });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ADMIN SUBMISSIONS API (for admin panel)
+// Get all task submissions
+app.get('/api/submissions', adminAuth, async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = supabase.from('task_submissions').select('*, tasks(title, reward, reward_type), users(phone, name)').order('created_at', { ascending: false });
+    if (status && status !== 'all') query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Approve submission
+app.post('/api/submissions/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: sub, error: subErr } = await supabase.from('task_submissions').select('*, tasks(reward, reward_type)').eq('id', id).single();
+    if (subErr || !sub) return res.status(404).json({ error: 'Submission not found' });
+    
+    await supabase.from('task_submissions').update({ status: 'approved' }).eq('id', id);
+    
+    // Credit user wallet
+    const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('id', sub.user_id).single();
+    if (user) {
+      const reward = sub.tasks?.reward || 0;
+      const newBalance = (parseFloat(user.wallet_balance) || 0) + reward;
+      await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
+      
+      // Log transaction
+      await supabase.from('wallet_transactions').insert({
+        user_id: user.id,
+        type: 'task_reward',
+        amount: reward,
+        description: 'Task reward: ' + (sub.tasks?.title || 'Task'),
+        status: 'completed'
+      });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reject submission
+app.post('/api/submissions/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await supabase.from('task_submissions').update({ status: 'rejected' }).eq('id', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ADMIN PANEL API (for admin-vercel)
 // Password check middleware
 const ADMIN_PW = process.env.ADMIN_PW || 'admin123';
@@ -953,27 +1107,18 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
   }
 });
 
+// Debug test route
+app.get('/admin/api/test-new-route', adminAuth, async (req, res) => {
+  res.json({ success: true, message: 'New route works!' });
+});
+
 // Users
-app.get('/admin/api/users', adminAuth, async (req, res) => {
+app.get('/admin/api/all-users', adminAuth, async (req, res) => {
   try {
-    const { page = 1, search = '' } = req.query;
-    const limit = 20;
-    // Debug: check if supabase is working
-    const { data: allUsers, error: countError } = await supabase.from('users').select('id');
-    console.log('Users query result:', countError, 'count:', allUsers?.length);
-    const totalCount = allUsers?.length || 0;
-    
-    // Get paginated users
-    let query = supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
-    if (search) {
-      query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
-    }
-    const { data, error } = query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
-    console.log('Paginated users:', error, 'count:', data?.length);
+    const { data, error } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan').order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ users: data || [], total: totalCount });
+    res.json({ users: data || [], total: data?.length || 0 });
   } catch (e) {
-    console.log('Users API error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
