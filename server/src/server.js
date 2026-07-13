@@ -958,15 +958,18 @@ app.get('/admin/api/users', adminAuth, async (req, res) => {
   try {
     const { page = 1, search = '' } = req.query;
     const limit = 20;
+    // Get all users first to get total count
+    const { data: allUsers } = await supabase.from('users').select('id');
+    const totalCount = allUsers?.length || 0;
+    
+    // Get paginated users
     let query = supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
     if (search) {
       query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
     }
     const { data, error } = query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
     if (error) return res.status(500).json({ error: error.message });
-    // Get total count separately
-    const { count } = await supabase.from('users').select('*', { count: 'exact', head: true });
-    res.json({ users: data || [], total: count || 0 });
+    res.json({ users: data || [], total: totalCount });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
