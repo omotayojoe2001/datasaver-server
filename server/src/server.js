@@ -8,7 +8,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-// Task endpoints: /api/tasks, /api/tasks/all, /api/tasks/create
+// Task endpoints: /api/tasks, /api/tasks/all, /api/tasks/create, /admin/api/tasks/*
 
 app.use(cors());
 // Increase JSON body limit for proof uploads
