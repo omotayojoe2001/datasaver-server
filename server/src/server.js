@@ -404,6 +404,16 @@ app.post('/api/buy-data', async (req, res) => {
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
+      // Send notification for successful purchase
+      try {
+        await supabase.from('notifications').insert({
+          title: 'Data Purchased',
+          body: plan.size + ' ' + plan.network + ' data sent to ' + phone,
+          type: 'data',
+          target_phone: phone
+        });
+      } catch (nfe) { console.log('Notif error:', nfe.message); }
+
       res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - chargeAmount });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
@@ -481,7 +491,17 @@ app.post('/api/buy-airtime', async (req, res) => {
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
-      res.json({ success: true, transaction_id: txn.id, message: 'N' + amount + ' airtime sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(amount) });
+      // Send notification for successful purchase
+      try {
+        await supabase.from('notifications').insert({
+          title: 'Airtime Purchased',
+          body: '₦' + amount + ' ' + network + ' airtime sent to ' + phone,
+          type: 'airtime',
+          target_phone: phone
+        });
+      } catch (nfe) { console.log('Notif error:', nfe.message); }
+
+      res.json({ success: true, transaction_id: txn.id, message: '₦' + amount + ' airtime sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(amount) });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
       await supabase.from('transactions')
