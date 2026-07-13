@@ -1651,11 +1651,45 @@ app.get('/admin/api/wallet-transactions', adminAuth, async (req, res) => {
   }
 });
 
+// GET settings for admin panel
+app.get('/admin/api/settings', adminAuth, async (req, res) => {
+  try {
+    const { data: settings, error } = await supabase.from('app_settings').select('key, value');
+    if (error) return res.status(500).json({ error: error.message });
+    
+    // Convert array to object
+    const settingsObj = {};
+    if (settings) {
+      for (const s of settings) {
+        settingsObj[s.key] = s.value;
+      }
+    }
+    res.json(settingsObj);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/admin/api/settings', adminAuth, async (req, res) => {
   try {
     const { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement, new_password } = req.body;
-    console.log('Settings update:', { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement });
-    if (new_password) console.log('Admin password change requested');
+    
+    // Save each setting to app_settings table
+    const settings = {
+      premium_price: premium_price || '500',
+      premium_duration: premium_duration || '7',
+      professional_price: professional_price || '1500',
+      professional_duration: professional_duration || '30',
+      enterprise_price: enterprise_price || '5000',
+      enterprise_duration: enterprise_duration || '30',
+      announcement: announcement || ''
+    };
+    
+    for (const [key, value] of Object.entries(settings)) {
+      await supabase.from('app_settings').upsert({ key, value }, { onConflict: 'key' });
+    }
+    
+    console.log('Settings saved:', settings);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
