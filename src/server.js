@@ -1135,6 +1135,212 @@ app.post('/admin/api/wallet/topup', adminAuth, async (req, res) => {
 });
 
 // ============================================
+// ADMIN USER MANAGEMENT
+// ============================================
+
+// GET user details
+app.get('/admin/api/users/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: user, error: userErr } = await supabase.from('users').select('*').eq('id', id).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
+    
+    const { data: transactions } = await supabase.from('transactions').select('*').eq('user_id', id).order('created_at', { ascending: false }).limit(50);
+    const { data: walletTransactions } = await supabase.from('wallet_transactions').select('*').eq('user_id', id).order('created_at', { ascending: false }).limit(50);
+    const { data: taskSubmissions } = await supabase.from('task_submissions').select('*').eq('user_id', id).order('created_at', { ascending: false }).limit(20);
+    
+    res.json({ user, transactions: transactions || [], walletTransactions: walletTransactions || [], taskSubmissions: taskSubmissions || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Credit user wallet
+app.post('/admin/api/users/:id/credit', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, description } = req.body;
+    if (!amount) return res.status(400).json({ error: 'Amount required' });
+    
+    const { data: user, error: userErr } = await supabase.from('users').select('*').eq('id', id).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
+    
+    const newBalance = (parseFloat(user.wallet_balance) || 0) + parseFloat(amount);
+    await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', id);
+    await supabase.from('wallet_transactions').insert({
+      user_id: id,
+      type: 'credit',
+      amount: parseFloat(amount),
+      description: description || 'Admin credit',
+      status: 'success'
+    });
+    res.json({ success: true, balance: newBalance });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Debit user wallet
+app.post('/admin/api/users/:id/debit', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, description } = req.body;
+    if (!amount) return res.status(400).json({ error: 'Amount required' });
+    
+    const { data: user, error: userErr } = await supabase.from('users').select('*').eq('id', id).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
+    
+    const currentBalance = parseFloat(user.wallet_balance) || 0;
+    const debitAmount = parseFloat(amount);
+    if (currentBalance < debitAmount) return res.status(400).json({ error: 'Insufficient balance' });
+    
+    const newBalance = currentBalance - debitAmount;
+    await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', id);
+    await supabase.from('wallet_transactions').insert({
+      user_id: id,
+      type: 'debit',
+      amount: debitAmount,
+      description: description || 'Admin debit',
+      status: 'success'
+    });
+    res.json({ success: true, balance: newBalance });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Change user subscription
+app.post('/admin/api/users/:id/subscription', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { plan, days } = req.body;
+    if (!plan) return res.status(400).json({ error: 'Plan required' });
+    
+    const updates = { subscription_plan: plan };
+    if (days && days > 0) {
+      const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+      updates.subscription_expires_at = expiresAt;
+    } else {
+      updates.subscription_expires_at = null;
+    }
+    
+    await supabase.from('users').update(updates).eq('id', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update user profile
+app.post('/admin/api/users/:id/update', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, phone, email } = req.body;
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (phone !== undefined) updates.phone = phone;
+    if (email !== undefined) updates.email = email;
+    
+    const { error } = await supabase.from('users').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete user
+app.delete('/admin/api/users/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Delete related data first
+    await supabase.from('wallet_transactions').delete().eq('user_id', id);
+    await supabase.from('task_submissions').delete().eq('user_id', id);
+    await supabase.from('transactions').delete().eq('user_id', id);
+    await supabase.from('savings_history').delete().eq('user_id', id);
+    // Delete user
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// ADMIN DATA PLANS MANAGEMENT
+// ============================================
+
+// Get all data plans
+app.get('/admin/api/data-plans', adminAuth, async (req, res) => {
+  try {
+    const { network } = req.query;
+    let query = supabase.from('data_plans').select('*').order('amount', { ascending: true });
+    if (network) query = query.eq('network', network.toUpperCase());
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create data plan
+app.post('/admin/api/data-plans', adminAuth, async (req, res) => {
+  try {
+    const { network, size, amount, selling_price, data_id, active } = req.body;
+    if (!size || !amount) return res.status(400).json({ error: 'Size and cost required' });
+    
+    const { data, error } = await supabase.from('data_plans').insert({
+      network: network || 'MTN',
+      size,
+      amount,
+      selling_price: selling_price || amount,
+      data_id,
+      active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update data plan
+app.post('/admin/api/data-plans/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { network, size, amount, selling_price, data_id, active } = req.body;
+    const updates = {};
+    if (network) updates.network = network;
+    if (size) updates.size = size;
+    if (amount) updates.amount = amount;
+    if (selling_price !== undefined) updates.selling_price = selling_price;
+    if (data_id !== undefined) updates.data_id = data_id;
+    if (active !== undefined) updates.active = active;
+    
+    const { error } = await supabase.from('data_plans').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete data plan
+app.post('/admin/api/data-plans/:id/delete', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('data_plans').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
 // ADMIN PANEL (deployed separately via admin-vercel)
 // ============================================
 
