@@ -52,11 +52,7 @@ try {
 }
 
 // DataStation API config
-<<<<<<< Updated upstream
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
-=======
-const DATASTATION_URL = process.env.DATASTATION_URL;
->>>>>>> Stashed changes
 const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN;
 
 // Paystack config
@@ -910,12 +906,44 @@ const adminAuth = (req, res, next) => {
 // Dashboard
 app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
   try {
-    const { data: users } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    
+    const { data: users } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan, subscription_expires_at');
     const { data: txns } = await supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(100);
     const { data: savings } = await supabase.from('savings_history').select('*').order('created_at', { ascending: false });
     
+    // Calculate stats
+    const totalUsers = users?.length || 0;
+    const signupsToday = users?.filter(u => u.created_at?.startsWith(today)).length || 0;
+    const activeSubscriptions = users?.filter(u => u.subscription_plan && u.subscription_plan !== 'basic' && (!u.subscription_expires_at || new Date(u.subscription_expires_at) > new Date())).length || 0;
+    
+    // Revenue calculations
+    const successTxns = txns?.filter(t => t.status === 'success') || [];
+    const revenueToday = successTxns.filter(t => t.created_at?.startsWith(today)).reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+    const revenueWeek = successTxns.filter(t => t.created_at >= weekAgo).reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+    const revenueTotal = successTxns.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+    
+    // Wallet deposits
+    const { data: walletTxns } = await supabase.from('wallet_transactions').select('amount, type').eq('type', 'credit') || { data: [] };
+    const depositsTotal = walletTxns?.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0) || 0;
+    
+    // Profit = deposits - spent
+    const profit = depositsTotal - revenueTotal;
+    
+    // Pending tasks
+    const { count: pendingTasks } = await supabase.from('task_submissions').select('*', { count: 'exact', head: true }).eq('status', 'pending');
+    
     res.json({
-      totalUsers: users?.length || 0,
+      totalUsers,
+      signupsToday,
+      activeSubscriptions,
+      revenueToday,
+      revenueWeek,
+      revenueTotal,
+      depositsTotal,
+      profit,
+      pendingTasks: pendingTasks || 0,
       recentUsers: users?.slice(0, 5) || [],
       recentTransactions: txns || [],
       savingsHistory: savings || []
@@ -936,7 +964,9 @@ app.get('/admin/api/users', adminAuth, async (req, res) => {
     }
     const { data, error } = query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ users: data || [], total: data?.length || 0 });
+    // Get total count separately
+    const { count } = await supabase.from('users').select('*', { count: 'exact', head: true });
+    res.json({ users: data || [], total: count || 0 });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -945,9 +975,27 @@ app.get('/admin/api/users', adminAuth, async (req, res) => {
 // Transactions
 app.get('/admin/api/transactions', adminAuth, async (req, res) => {
   try {
-    const { data, error } = await supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(200);
+    const { status, type } = req.query;
+    let query = supabase.from('transactions').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+    if (status) query = query.eq('status', status);
+    if (type) query = query.eq('type', type);
+    const { data, count, error } = await query.limit(200);
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ transactions: data || [] });
+    res.json({ transactions: data || [], total: count || 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Subscriptions
+app.get('/admin/api/subscriptions', adminAuth, async (req, res) => {
+  try {
+    const { data: users } = await supabase.from('users').select('id, name, phone, subscription_plan, subscription_expires_at, wallet_balance').order('created_at', { ascending: false });
+    const { data: history } = await supabase.from('subscriptions').select('*').order('created_at', { ascending: false }).limit(100);
+    
+    const activeUsers = users?.filter(u => u.subscription_plan && u.subscription_plan !== 'basic' && (!u.subscription_expires_at || new Date(u.subscription_expires_at) > new Date())) || [];
+    
+    res.json({ activeUsers, history: history || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1357,8 +1405,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Proxy: http://localhost:${PORT}/proxy?url=https://example.com`);
 });
 
-<<<<<<< Updated upstream
-
-
-=======
->>>>>>> Stashed changes
