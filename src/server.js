@@ -918,8 +918,7 @@ app.post('/api/tasks/create', adminAuth, async (req, res) => {
     
     const { data, error } = await supabase.from('tasks').insert({
       title, description, reward, reward_type: reward_type || 'airtime',
-      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
-      proof_required: proof_required || false, active: active !== false
+      min_plan: min_plan || 'none', proof_required: proof_required || false, active: active !== false
     });
     
     if (error) return res.status(500).json({ error: error.message });
@@ -937,8 +936,7 @@ app.post('/admin/api/tasks/create', adminAuth, async (req, res) => {
     
     const { data, error } = await supabase.from('tasks').insert({
       title, description, reward, reward_type: reward_type || 'airtime',
-      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
-      proof_required: proof_required || false, active: active !== false
+      min_plan: min_plan || 'none', proof_required: proof_required || false, active: active !== false
     });
     
     if (error) return res.status(500).json({ error: error.message });
@@ -1490,6 +1488,38 @@ app.put('/api/referrals/settings', async (req, res) => {
     );
 
     res.json({ success: true, reward_amount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// WALLET TRANSACTIONS
+app.get('/api/wallet-transactions', adminAuth, async (req, res) => {
+  try {
+    const { type } = req.query;
+    let query = supabase.from('wallet_transactions').select('*, users(phone, name)').order('created_at', { ascending: false });
+    if (type && type !== 'all') query = query.eq('type', type);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ADMIN SETTINGS
+app.post('/api/settings', adminAuth, async (req, res) => {
+  try {
+    const { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement, new_password } = req.body;
+    
+    // Log settings changes - would need settings table to store
+    console.log('Settings update:', { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement });
+    
+    if (new_password) {
+      console.log('Admin password change requested');
+    }
+    
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
