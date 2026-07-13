@@ -32,7 +32,7 @@ if errorlevel 1 (
 )
 
 echo [3/7] Compiling Java...
-javac -source 1.8 -target 1.8 -classpath "%PLATFORM%" -d "%BIN%\classes" "%SRC%\com\datasaver\MainActivity.java" "%SRC%\com\datasaver\DataSaverService.java" "%SRC%\com\datasaver\DataSaverVpnService.java" "%GEN%\com\datasaver\R.java"
+javac -source 1.8 -target 1.8 -classpath "%PLATFORM%" -d "%BIN%\classes" "%SRC%\com\datasaver\MainActivity.java" "%SRC%\com\datasaver\DataSaverService.java" "%SRC%\com\datasaver\DataSaverVpnService.java" "%SRC%\com\datasaver\BootReceiver.java" "%GEN%\com\datasaver\R.java"
 if errorlevel 1 (
     echo ERROR: javac failed
     exit /b 1

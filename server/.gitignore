@@ -1,3 +1,8 @@
+android/
+android-lite/bin/
+android-lite/gen/
+android-lite/out/
 node_modules/
-server.log
+server/server.log
 .env
+server/.env

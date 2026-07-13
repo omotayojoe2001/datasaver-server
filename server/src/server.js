@@ -20,13 +20,44 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ============================================
+// FIREBASE ADMIN (for push notifications)
+// ============================================
+let admin = null;
+try {
+    // Service account from env var or Render secret
+    const serviceAccount = {
+        type: "service_account",
+        project_id: process.env.FIREBASE_PROJECT_ID || "acorn-data-saver-app",
+        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+        private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+        client_id: process.env.FIREBASE_CLIENT_ID,
+        auth_uri: "https://accounts.google.com/o/oauth2/auth",
+        token_uri: "https://oauth2.googleapis.com/token",
+        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+        client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
+    };
+    if (serviceAccount.private_key && serviceAccount.client_email) {
+        admin = require('firebase-admin');
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log('Firebase Admin initialized');
+    } else {
+        console.log('Firebase credentials not configured - push notifications disabled');
+    }
+} catch (e) {
+    console.log('Firebase init failed:', e.message);
+}
+
 // DataStation API config
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
-const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN || '1a3812d2a280b21cf9a198dde909bdf3d80c0b70';
+const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN;
 
 // Paystack config
-const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET || '<paystack_secret>';
-const PAYSTACK_PUBLIC = process.env.PAYSTACK_PUBLIC || '<paystack_public>';
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET;
+const PAYSTACK_PUBLIC = process.env.PAYSTACK_PUBLIC;
 
 // DataStation uses numeric network IDs
 const NETWORK_IDS = { 'MTN': 1, 'GLO': 2, '9MOBILE': 3, 'AIRTEL': 4 };
@@ -56,9 +87,9 @@ app.get('/api/plans', async (req, res) => {
 // USER API
 // ============================================
 
-// POST /api/register  { email, pin, name, phone }
+// POST /api/register  { email, pin, name, phone, referral_code }
 app.post('/api/register', async (req, res) => {
-  const { phone, pin, name, email } = req.body;
+  const { phone, pin, name, email, referral_code } = req.body;
   if (!email || !pin) return res.status(400).json({ error: 'Email and PIN required' });
 
   try {
@@ -72,10 +103,70 @@ app.post('/api/register', async (req, res) => {
       if (existing) return res.status(409).json({ error: 'Phone number already registered. Please login instead.' });
     }
 
-    const row = { email, pin: pin || '0000', name: name || '', phone: phone || '' };
-    const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan').single();
+    // Generate referral code for this user
+    const digits = (phone || '').replace(/[^0-9]/g, '');
+    const shortDigits = digits.length > 6 ? digits.slice(-6) : digits;
+    const userReferralCode = 'DS' + shortDigits + Math.random().toString(36).substring(2, 5).toUpperCase();
+
+    const row = { email, pin: pin || '0000', name: name || '', phone: phone || '', referral_code: userReferralCode };
+    const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan, referral_code').single();
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'basic', message: 'Account created' });
+
+    // If referral code provided, apply referral
+    let referralMsg = '';
+    if (referral_code && data.id) {
+      try {
+        // Find referrer
+        const { data: referrer } = await supabase.from('users').select('id, phone').eq('referral_code', referral_code).single();
+        if (referrer && referrer.phone !== phone) {
+          // Get reward amount
+          const { data: settings } = await supabase.from('app_settings').select('value').eq('key', 'referral_reward_amount').single();
+          const rewardAmount = settings ? parseInt(settings.value) : 500;
+
+          await supabase.from('referrals').insert({
+            referrer_user_id: referrer.id,
+            referred_user_id: data.id,
+            reward_amount: rewardAmount,
+            status: 'completed'
+          });
+
+          // Credit referrer's wallet
+          const { data: refBal } = await supabase.from('users').select('wallet_balance').eq('id', referrer.id).single();
+          if (refBal) {
+            const newBal = parseFloat(refBal.wallet_balance || 0) + rewardAmount;
+            await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
+          }
+
+          await supabase.from('wallet_transactions').insert({
+            user_id: referrer.id,
+            type: 'credit',
+            amount: rewardAmount,
+            description: 'Referral reward for inviting ' + phone
+          });
+
+          referralMsg = ' Referral bonus \u20a6' + rewardAmount + ' sent to referrer!';
+        }
+      } catch (refErr) {
+        // Referral failed — don't block registration
+      }
+    }
+
+    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'none', referral_code: data.referral_code, message: 'Account created' + referralMsg });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/fcm-token  { phone, fcm_token }
+// Register FCM token for push notifications
+app.post('/api/fcm-token', async (req, res) => {
+  const { phone, fcm_token } = req.body;
+  if (!phone || !fcm_token) return res.status(400).json({ error: 'Phone and fcm_token required' });
+
+  try {
+    const { error } = await supabase.from('users').update({ fcm_token }).eq('phone', phone);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -87,19 +178,19 @@ app.post('/api/login', async (req, res) => {
   if ((!phone && !email) || !pin) return res.status(400).json({ error: 'Email/phone and PIN required' });
 
   try {
-    let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at');
+    let query = supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at, referral_code');
     if (email) {
       // Try email first, then fall back to treating it as phone
       const { data: emailUser } = await query.eq('email', email).single();
       if (emailUser) {
         if (emailUser.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
-        return res.json({ success: true, user_id: emailUser.id, name: emailUser.name, phone: emailUser.phone, email: emailUser.email, wallet_balance: emailUser.wallet_balance, subscription_plan: emailUser.subscription_plan || 'basic', message: 'Login successful' });
+        return res.json({ success: true, user_id: emailUser.id, name: emailUser.name, phone: emailUser.phone, email: emailUser.email, wallet_balance: emailUser.wallet_balance, subscription_plan: emailUser.subscription_plan || 'none', referral_code: emailUser.referral_code || '', message: 'Login successful' });
       }
       // Email not found, try as phone number
-      const { data: phoneUser } = await supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at').eq('phone', email).single();
+      const { data: phoneUser } = await supabase.from('users').select('id, name, phone, email, pin, wallet_balance, subscription_plan, subscription_expires_at, referral_code').eq('phone', email).single();
       if (phoneUser) {
         if (phoneUser.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
-        return res.json({ success: true, user_id: phoneUser.id, name: phoneUser.name, phone: phoneUser.phone, email: phoneUser.email, wallet_balance: phoneUser.wallet_balance, subscription_plan: phoneUser.subscription_plan || 'basic', message: 'Login successful' });
+        return res.json({ success: true, user_id: phoneUser.id, name: phoneUser.name, phone: phoneUser.phone, email: phoneUser.email, wallet_balance: phoneUser.wallet_balance, subscription_plan: phoneUser.subscription_plan || 'none', referral_code: phoneUser.referral_code || '', message: 'Login successful' });
       }
       return res.status(404).json({ error: 'Account not found. Please sign up first.' });
     } else {
@@ -107,7 +198,7 @@ app.post('/api/login', async (req, res) => {
       const { data: user, error } = await query.single();
       if (error || !user) return res.status(404).json({ error: 'Account not found. Please sign up first.' });
       if (user.pin !== pin) return res.status(401).json({ error: 'Incorrect PIN' });
-      res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, subscription_plan: user.subscription_plan || 'basic', message: 'Login successful' });
+      res.json({ success: true, user_id: user.id, name: user.name, phone: user.phone, email: user.email, wallet_balance: user.wallet_balance, subscription_plan: user.subscription_plan || 'none', referral_code: user.referral_code || '', message: 'Login successful' });
     }
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -151,14 +242,17 @@ app.post('/api/savings/sync', async (req, res) => {
       last_savings_sync: new Date().toISOString()
     }).eq('id', user.id);
 
-    // Also save daily snapshot
+    // Save daily snapshot - store delta (today's savings only, not cumulative)
     const today = new Date().toISOString().split('T')[0];
     const { data: existing } = await supabase.from('savings_history')
-      .select('id').eq('user_id', user.id).eq('date', today).single();
+      .select('id, saved_bytes, blocked_requests').eq('user_id', user.id).eq('date', today).single();
     if (existing) {
+      // Only update if new values are higher (never go backwards)
+      const newSaved = Math.max(existing.saved_bytes || 0, saved_bytes || 0);
+      const newBlocked = Math.max(existing.blocked_requests || 0, blocked_requests || 0);
       await supabase.from('savings_history').update({
-        saved_bytes: saved_bytes || 0,
-        blocked_requests: blocked_requests || 0,
+        saved_bytes: newSaved,
+        blocked_requests: newBlocked,
         ad_bytes: ad_bytes || 0,
         bg_bytes: bg_bytes || 0
       }).eq('id', existing.id);
@@ -226,10 +320,10 @@ app.get('/api/user/:phone', async (req, res) => {
       .single();
     if (error) return res.status(404).json({ error: 'User not found' });
     // Check if subscription expired
-    if (data.subscription_plan && data.subscription_plan !== 'basic' && data.subscription_expires_at) {
+    if (data.subscription_plan && data.subscription_plan !== 'none' && data.subscription_expires_at) {
       if (new Date(data.subscription_expires_at) < new Date()) {
-        await supabase.from('users').update({ subscription_plan: 'basic', subscription_expires_at: null }).eq('id', data.id);
-        data.subscription_plan = 'basic';
+        await supabase.from('users').update({ subscription_plan: 'none', subscription_expires_at: null }).eq('id', data.id);
+        data.subscription_plan = 'none';
         data.subscription_expires_at = null;
       }
     }
@@ -310,6 +404,16 @@ app.post('/api/buy-data', async (req, res) => {
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
+      // Send notification for successful purchase
+      try {
+        await supabase.from('notifications').insert({
+          title: 'Data Purchased',
+          body: plan.size + ' ' + plan.network + ' data sent to ' + phone,
+          type: 'data',
+          target_phone: phone
+        });
+      } catch (nfe) { console.log('Notif error:', nfe.message); }
+
       res.json({ success: true, transaction_id: txn.id, message: plan.size + ' data sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - chargeAmount });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
@@ -387,7 +491,17 @@ app.post('/api/buy-airtime', async (req, res) => {
         .update({ status: 'success', api_response: JSON.stringify(apiRes.data) })
         .eq('id', txn.id);
 
-      res.json({ success: true, transaction_id: txn.id, message: 'N' + amount + ' airtime sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(amount) });
+      // Send notification for successful purchase
+      try {
+        await supabase.from('notifications').insert({
+          title: 'Airtime Purchased',
+          body: '₦' + amount + ' ' + network + ' airtime sent to ' + phone,
+          type: 'airtime',
+          target_phone: phone
+        });
+      } catch (nfe) { console.log('Notif error:', nfe.message); }
+
+      res.json({ success: true, transaction_id: txn.id, message: '₦' + amount + ' airtime sent to ' + phone, api: apiRes.data, wallet_balance: walletBal - parseFloat(amount) });
     } catch (apiErr) {
       const errMsg = apiErr.response ? JSON.stringify(apiErr.response.data) : apiErr.message;
       await supabase.from('transactions')
@@ -427,9 +541,9 @@ app.get('/api/transactions/:phone', async (req, res) => {
 // ============================================
 
 const PLAN_CONFIG = {
-  premium:      { amount: 500,   duration: '7 days',  ms: 7 * 24 * 60 * 60 * 1000 },
-  professional: { amount: 1500,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000 },
-  enterprise:   { amount: 5000,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000 }
+  premium:      { amount: 500,   duration: '90 days (promo)', ms: 90 * 24 * 60 * 60 * 1000, devices: 1, promo: true },
+  professional: { amount: 1500,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000, devices: 2 },
+  enterprise:   { amount: 5000,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000, devices: 5 }
 };
 
 // POST /api/subscribe  { phone, plan }
@@ -472,11 +586,11 @@ app.get('/api/subscription/:phone', async (req, res) => {
     const { data: user } = await supabase.from('users').select('id, subscription_plan, subscription_expires_at').eq('phone', req.params.phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
     // Check expiry
-    let plan = user.subscription_plan || 'basic';
+    let plan = user.subscription_plan || 'none';
     let expires = user.subscription_expires_at;
-    if (plan !== 'basic' && expires && new Date(expires) < new Date()) {
-      await supabase.from('users').update({ subscription_plan: 'basic', subscription_expires_at: null }).eq('id', user.id);
-      plan = 'basic';
+    if (plan !== 'none' && expires && new Date(expires) < new Date()) {
+      await supabase.from('users').update({ subscription_plan: 'none', subscription_expires_at: null }).eq('id', user.id);
+      plan = 'none';
       expires = null;
     }
     res.json({ plan, expires_at: expires });
@@ -654,17 +768,22 @@ app.post('/api/wallet/topup', async (req, res) => {
 // ============================================
 
 // GET /api/tasks?phone=xxx — list tasks + user's status on each
+// GET /api/tasks?phone=xxx â€” list tasks filtered by plan level
 app.get('/api/tasks', async (req, res) => {
   const { phone } = req.query;
+  const PLAN_LEVEL = { none: 0, premium: 1, professional: 2, enterprise: 3 };
+  const DAILY_TASK_LIMITS = { none: 0, premium: 5, professional: 8, enterprise: 999 };
   try {
-    const { data: tasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
+    const { data: allTasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
     let pending_reward = 0, claimable_reward = 0;
-    let userTasks = [];
+    let userPlan = 'none';
+    const subMap = {};
+
     if (phone) {
-      const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+      const { data: user } = await supabase.from('users').select('id, subscription_plan').eq('phone', phone).single();
       if (user) {
+        userPlan = user.subscription_plan || 'none';
         const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
-        const subMap = {};
         if (submissions) {
           for (const s of submissions) {
             subMap[s.task_id] = s.status;
@@ -672,14 +791,29 @@ app.get('/api/tasks', async (req, res) => {
             if (s.status === 'approved') claimable_reward += s.reward || 0;
           }
         }
-        if (tasks) {
-          for (const t of tasks) {
-            t.user_status = subMap[t.id] || 'available';
-          }
-        }
       }
     }
-    res.json({ tasks: tasks || [], pending_reward, claimable_reward });
+
+    const userLevel = PLAN_LEVEL[userPlan] ?? 0;
+    const dailyLimit = DAILY_TASK_LIMITS[userPlan] ?? 2;
+    const visibleTasks = [];
+    const lockedTasks = [];
+
+    for (const t of (allTasks || [])) {
+      const taskMinPlan = t.min_plan || 'none';
+      const taskLevel = PLAN_LEVEL[taskMinPlan] ?? 0;
+      t.user_status = subMap[t.id] || 'available';
+      if (taskLevel <= userLevel) {
+        visibleTasks.push(t);
+      } else {
+        lockedTasks.push({ id: t.id, title: t.title, reward: t.reward, reward_type: t.reward_type, min_plan: taskMinPlan, locked: true });
+      }
+    }
+
+    const limitedTasks = visibleTasks.slice(0, dailyLimit);
+    const hiddenCount = Math.max(0, visibleTasks.length - dailyLimit);
+
+    res.json({ tasks: limitedTasks, locked_tasks: lockedTasks, hidden_count: hiddenCount, daily_limit: dailyLimit, user_plan: userPlan, pending_reward, claimable_reward });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -758,13 +892,99 @@ app.post('/api/tasks/claim', async (req, res) => {
   }
 });
 
+// ADMIN PANEL API (for admin-vercel)
+// Password check middleware
+const ADMIN_PW = process.env.ADMIN_PW || 'admin123';
+const adminAuth = (req, res, next) => {
+  const pw = req.headers['x-admin-password'];
+  if (pw !== ADMIN_PW) {
+    return res.status(403).json({ error: 'Invalid admin password' });
+  }
+  next();
+};
+
+// Dashboard
+app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
+  try {
+    const { data: users } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
+    const { data: txns } = await supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(100);
+    const { data: savings } = await supabase.from('savings_history').select('*').order('created_at', { ascending: false });
+    
+    res.json({
+      totalUsers: users?.length || 0,
+      recentUsers: users?.slice(0, 5) || [],
+      recentTransactions: txns || [],
+      savingsHistory: savings || []
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Users
+app.get('/admin/api/users', adminAuth, async (req, res) => {
+  try {
+    const { page = 1, search = '' } = req.query;
+    const limit = 20;
+    let query = supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
+    }
+    const { data, error } = query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ users: data || [], total: data?.length || 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Transactions
+app.get('/admin/api/transactions', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(200);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ transactions: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Wallet transactions
+app.get('/admin/api/wallet/:phone', adminAuth, async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
+    if (!user) return res.json({ transactions: [] });
+    const { data, error } = await supabase.from('wallet_transactions').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ transactions: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update user wallet
+app.post('/admin/api/wallet/topup', adminAuth, async (req, res) => {
+  try {
+    const { phone, amount } = req.body;
+    const { data: user } = await supabase.from('users').select('*').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const newBalance = (parseFloat(user.wallet_balance) || 0) + parseFloat(amount);
+    await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
+    await supabase.from('wallet_transactions').insert({
+      user_id: user.id,
+      type: 'credit',
+      amount: parseFloat(amount),
+      description: 'Admin topup'
+    });
+    res.json({ success: true, new_balance: newBalance });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================
-// ADMIN PANEL
+// ADMIN PANEL (deployed separately via admin-vercel)
 // ============================================
-const adminRoutes = require('./admin/routes.js')(supabase);
-const path = require('path');
-app.use('/admin', adminRoutes);
-app.get('/admin', (req, res) => { res.sendFile(path.join(__dirname, 'admin', 'admin.html')); });
 
 // ============================================
 // PRIVACY POLICY
@@ -873,8 +1093,265 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
+app.get('/debug-env', (req, res) => {
+  res.json({
+    DATASTATION_URL: process.env.DATASTATION_URL || 'NOT SET',
+    DATASTATION_TOKEN: process.env.DATASTATION_TOKEN ? 'SET' : 'NOT SET',
+    NODE_ENV: process.env.NODE_ENV
+  });
+});
+
+// ============================================
+// NOTIFICATIONS API
+// ============================================
+
+// GET /api/notifications?phone=xxx&since_id=0&limit=30
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const { phone, since_id, limit } = req.query;
+    if (!phone) return res.status(400).json({ error: 'Phone required' });
+
+    // Get user ID from phone
+    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+    if (!user) return res.json([]);
+
+    let query = supabase.from('notifications')
+      .select('*')
+      .or(`target_phone.eq.${phone},target_phone.is.null`)
+      .order('id', { ascending: true });
+
+    if (since_id && since_id !== '0') {
+      query = query.gt('id', parseInt(since_id));
+    }
+
+    const maxLimit = Math.min(parseInt(limit) || 30, 100);
+    query = query.limit(maxLimit);
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/notifications  { title, body, type, target_phone?, admin_key }
+// admin_key must match ADMIN_KEY env var
+app.post('/api/notifications', async (req, res) => {
+  try {
+    const { title, body, type, target_phone, admin_key } = req.body;
+    if (!title || !body) return res.status(400).json({ error: 'Title and body required' });
+    if (admin_key !== (process.env.ADMIN_KEY || 'datasaver-admin-2024')) {
+      return res.status(403).json({ error: 'Invalid admin key' });
+    }
+
+    // Store in database
+    const row = {
+      title,
+      body,
+      type: type || 'general',
+      target_phone: target_phone || null
+    };
+    const { data, error } = await supabase.from('notifications').insert(row).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Send via FCM if Firebase is configured
+    if (admin) {
+      // Build FCM message
+      const message = {
+        notification: {
+          title: title,
+          body: body
+        },
+        data: {
+          type: type || 'general',
+          click_action: 'OPEN_APP'
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channel_id: 'datasaver_push',
+            sound: 'default',
+            priority: 'high'
+          }
+        }
+      };
+
+      if (target_phone) {
+        // Find user's FCM token
+        const { data: user } = await supabase.from('users').select('fcm_token').eq('phone', target_phone).single();
+        if (user && user.fcm_token) {
+          message.token = user.fcm_token;
+          await admin.messaging().send(message);
+          console.log('FCM sent to', target_phone);
+        }
+      } else {
+        // Broadcast to all users - send to first 500 tokens
+        const { data: users } = await supabase.from('users').select('fcm_token').not('fcm_token', 'is', null).limit(500);
+        if (users && users.length > 0) {
+          // Send to multiple tokens
+          const tokens = users.map(u => u.fcm_token).filter(t => t);
+          if (tokens.length > 0) {
+            message.tokens = tokens;
+            try {
+              const response = await admin.messaging().sendEachForMulticast(message);
+              console.log('FCM broadcast:', response.successCount, 'sent');
+            } catch (e) {
+              console.log('FCM broadcast error:', e.message);
+            }
+          }
+        }
+      }
+    }
+
+    res.json({ success: true, notification: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// REFERRAL SYSTEM
+// ============================================
+
+// GET /api/referrals/stats?phone=xxx
+app.get('/api/referrals/stats', async (req, res) => {
+  try {
+    const { phone } = req.query;
+    if (!phone) return res.status(400).json({ error: 'Phone required' });
+
+    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Count successful referrals
+    const { data: referrals, error } = await supabase.from('referrals')
+      .select('*')
+      .eq('referrer_user_id', user.id);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const count = (referrals || []).filter(r => r.status === 'completed').length;
+    const totalEarnings = (referrals || []).filter(r => r.status === 'completed')
+      .reduce((sum, r) => sum + (r.reward_amount || 0), 0);
+
+    // Get admin-configurable reward per referral (default 500)
+    const { data: settings } = await supabase.from('app_settings')
+      .select('value')
+      .eq('key', 'referral_reward_amount')
+      .single();
+    const rewardPerRef = settings ? parseInt(settings.value) : 500;
+
+    res.json({
+      referral_count: count,
+      total_earnings: totalEarnings,
+      reward_per_referral: rewardPerRef
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/referrals/apply  { phone, referral_code }
+// Called when a new user signs up with a referral code
+app.post('/api/referrals/apply', async (req, res) => {
+  try {
+    const { phone, referral_code } = req.body;
+    if (!phone || !referral_code) return res.status(400).json({ error: 'Phone and referral_code required' });
+
+    // Find referrer by their referral code
+    const { data: referrer } = await supabase.from('users')
+      .select('id, phone')
+      .eq('referral_code', referral_code)
+      .single();
+
+    if (!referrer) return res.status(404).json({ error: 'Invalid referral code' });
+    if (referrer.phone === phone) return res.status(400).json({ error: 'Cannot refer yourself' });
+
+    // Find the new user
+    const { data: newUser } = await supabase.from('users')
+      .select('id')
+      .eq('phone', phone)
+      .single();
+    if (!newUser) return res.status(404).json({ error: 'User not found' });
+
+    // Check if referral already exists
+    const { data: existing } = await supabase.from('referrals')
+      .select('id')
+      .eq('referred_user_id', newUser.id)
+      .single();
+    if (existing) return res.status(409).json({ error: 'Referral already applied' });
+
+    // Get reward amount
+    const { data: settings } = await supabase.from('app_settings')
+      .select('value')
+      .eq('key', 'referral_reward_amount')
+      .single();
+    const rewardAmount = settings ? parseInt(settings.value) : 500;
+
+    // Create referral record
+    await supabase.from('referrals').insert({
+      referrer_user_id: referrer.id,
+      referred_user_id: newUser.id,
+      reward_amount: rewardAmount,
+      status: 'completed'
+    });
+
+    // Credit reward to referrer's wallet
+    await supabase.from('users')
+      .update({ wallet_balance: supabase.rpc('increment_wallet', { user_id: referrer.id, amount: rewardAmount }) })
+      .eq('id', referrer.id);
+
+    // Also try direct update as fallback
+    const { data: referrerData } = await supabase.from('users')
+      .select('wallet_balance')
+      .eq('id', referrer.id)
+      .single();
+    if (referrerData) {
+      const newBal = parseFloat(referrerData.wallet_balance || 0) + rewardAmount;
+      await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
+    }
+
+    // Log wallet credit
+    await supabase.from('wallet_transactions').insert({
+      user_id: referrer.id,
+      type: 'credit',
+      amount: rewardAmount,
+      description: 'Referral reward for inviting ' + phone
+    });
+
+    res.json({ success: true, message: 'Referral applied! \u20a6' + rewardAmount + ' credited to referrer.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/referrals/settings  { admin_key, reward_amount }
+// Admin endpoint to update referral reward amount
+app.put('/api/referrals/settings', async (req, res) => {
+  try {
+    const { admin_key, reward_amount } = req.body;
+    if (admin_key !== (process.env.ADMIN_KEY || 'datasaver-admin-2024')) {
+      return res.status(403).json({ error: 'Invalid admin key' });
+    }
+    if (!reward_amount || reward_amount < 0) return res.status(400).json({ error: 'Invalid reward amount' });
+
+    // Upsert the setting
+    await supabase.from('app_settings').upsert(
+      { key: 'referral_reward_amount', value: String(reward_amount) },
+      { onConflict: 'key' }
+    );
+
+    res.json({ success: true, reward_amount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`DataSaver server running on port ${PORT}`);
   console.log(`API: http://localhost:${PORT}/api/plans`);
   console.log(`Proxy: http://localhost:${PORT}/proxy?url=https://example.com`);
 });
+
+
+

@@ -29,58 +29,84 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.io.PrintWriter;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class DataSaverVpnService extends VpnService {
 
     private static final String TAG = "DataSaverVPN";
     private static final String CHANNEL_ID = "datasaver_vpn";
+    private static final String NOTIF_CHANNEL_ID = "datasaver_push";
     private static final int NOTIF_ID = 2;
+    private static final int LOG_PORT = 8080;
+    private static final int MAX_LOG_ENTRIES = 500;
+    private static final String SERVER_URL = "https://datasaver-server.onrender.com";
+    private static final long NOTIF_POLL_INTERVAL = 120000; // 2 minutes
+
+    // Push notification state
+    public static volatile int unreadNotifCount = 0;
+    public static volatile String latestNotifTitle = "";
+    public static volatile String latestNotifBody = "";
+    public static volatile long lastNotifId = 0;
+    public static volatile boolean hasNewNotif = false;
+
+    public static final Deque<String> liveLog = new ArrayDeque<>();
+    public static final Object logLock = new Object();
+
+    public static void addLog(String action, String domain, String detail) {
+        String time = new SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(new Date());
+        String entry = time + "|" + action + "|" + domain + "|" + detail;
+        synchronized (logLock) {
+            ((ArrayDeque<String>)liveLog).addLast(entry);
+            if (liveLog.size() > MAX_LOG_ENTRIES) ((ArrayDeque<String>)liveLog).removeFirst();
+        }
+    }
 
     public static volatile boolean isVpnRunning = false;
 
-    // Real savings counters
-    public static final AtomicLong blockedAdBytes = new AtomicLong(0);
-    public static final AtomicLong blockedBgBytes = new AtomicLong(0);
-    public static final AtomicLong blockedAdRequests = new AtomicLong(0);
-    public static final AtomicLong blockedBgSyncs = new AtomicLong(0);
+    // Bulletproof: auto-restart if killed by OS
+    private static volatile long lastRestartAttempt = 0;
+    public static void restartIfNeeded(android.content.Context ctx) {
+        if (isVpnRunning) return;
+        long now = System.currentTimeMillis();
+        if (now - lastRestartAttempt < 10000) return; // debounce 10s
+        lastRestartAttempt = now;
+        android.content.SharedPreferences sp = ctx.getSharedPreferences("datasaver", android.content.Context.MODE_PRIVATE);
+        if (sp.getBoolean("vpn_should_run", false)) {
+            ctx.startService(new android.content.Intent(ctx, DataSaverVpnService.class));
+        }
+    }
+
+    // REAL counters — only things we can actually measure
+    public static final AtomicLong blockedAdRequests = new AtomicLong(0);  // ads blocked (DNS queries blocked)
+    public static final AtomicLong blockedBgSyncs = new AtomicLong(0);     // background syncs blocked
+    public static final AtomicLong totalDnsQueries = new AtomicLong(0);    // total DNS queries seen
     public static final AtomicLong totalPacketsProcessed = new AtomicLong(0);
 
-    // Background app DNS tracking: domain -> estimated bytes that would load
-    private static final ConcurrentHashMap<String, Long> bgBlockedDomains = new ConcurrentHashMap<>();
+    // Per-app blocked request counts: appName -> count of blocked DNS queries
+    public static final ConcurrentHashMap<String, AtomicLong> perAppBlockedCount = new ConcurrentHashMap<>();
+
+    // Daily reset tracking
+    private static volatile String currentSavingsDate = "";
 
     private ParcelFileDescriptor vpnInterface;
     private volatile boolean running = false;
     private Set<String> adDomains = new HashSet<>();
     private volatile String foregroundPackage = "";
-    private String userPlan = "basic";
+    private String userPlan = "none";
     private PowerManager.WakeLock wakeLock;
+    private static DataSaverVpnService serviceRef;
 
     // System packages that should never be blocked (even in background)
     private final Set<String> systemWhitelist = new HashSet<>();
-
-    // Known heavy background domains and their estimated data per request
-    private static final String[][] BG_HEAVY_DOMAINS = {
-        {"graph.facebook.com", "204800"},      // 200KB - Facebook sync
-        {"api.facebook.com", "102400"},         // 100KB
-        {"mqtt-mini.facebook.com", "51200"},    // 50KB - Facebook push
-        {"edge-mqtt.facebook.com", "51200"},    // 50KB
-        {"api.instagram.com", "204800"},        // 200KB - Instagram sync
-        {"i.instagram.com", "512000"},          // 500KB - Instagram prefetch images
-        {"scontent.cdninstagram.com", "1048576"}, // 1MB - Instagram content prefetch
-        {"api2.musical.ly", "102400"},          // 100KB - TikTok sync
-        {"log.tiktokv.com", "20480"},           // 20KB - TikTok analytics
-        {"api.twitter.com", "102400"},          // 100KB
-        {"mobile.twitter.com", "204800"},       // 200KB
-        {"web.whatsapp.com", "51200"},          // 50KB
-        {"pps.whatsapp.net", "102400"},         // 100KB - WhatsApp status prefetch
-        {"static.whatsapp.net", "204800"},      // 200KB
-        {"play.googleapis.com", "204800"},      // 200KB - Play Store sync
-        {"android.clients.google.com", "102400"}, // 100KB
-        {"update.googleapis.com", "102400"},    // 100KB - Google updates
-        {"firebaseinstallations.googleapis.com", "20480"}, // 20KB
-        {"app-measurement.com", "20480"},       // 20KB - Firebase analytics
-        {"connectivitycheck.gstatic.com", "1024"}, // 1KB
-    };
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -94,13 +120,18 @@ public class DataSaverVpnService extends VpnService {
 
     private void startVpn() {
         if (running) return;
+        serviceRef = this;
 
-        userPlan = getSharedPreferences("datasaver", MODE_PRIVATE).getString("subscription_plan", "basic");
- loadAdBlockList();
+        userPlan = getSharedPreferences("datasaver", MODE_PRIVATE).getString("subscription_plan", "none");
+        // Enforce image quality by plan
+        enforceImageQualityByPlan();
         buildSystemWhitelist();
         restoreSavings();
+        checkDailyReset();
         createNotificationChannel();
         startForeground(NOTIF_ID, buildNotification());
+        // Load ad block list in background — don't block VPN startup on slow phones
+        new Thread(this::loadAdBlockList, "AdBlockLoader").start();
 
         // Wake lock
         try {
@@ -114,33 +145,44 @@ public class DataSaverVpnService extends VpnService {
             builder.setSession("DataSaver");
             builder.addAddress("10.0.0.2", 32);
 
-            // Route ALL DNS through our VPN — this is how we control background apps
             builder.addDnsServer("10.0.0.1");
+            builder.addRoute("10.0.0.1", 32); // Only DNS virtual IP - internet works normally
 
-            // Only route DNS IPs through tunnel — regular traffic goes direct
-            builder.addRoute("10.0.0.1", 32);
-            builder.addRoute("1.1.1.1", 32);
-            builder.addRoute("1.0.0.1", 32);
-            builder.addRoute("8.8.8.8", 32);
-            builder.addRoute("8.8.4.4", 32);
-            // Capture common Nigerian ISP DNS servers
-            builder.addRoute("154.118.0.0", 16);  // MTN DNS range
-            builder.addRoute("197.210.0.0", 16);   // Glo DNS range
+
 
             builder.setMtu(1500);
 
             // Exclude our own app
             try { builder.addDisallowedApplication(getPackageName()); } catch (Exception e) {}
-            // Default bypass: banking and payment apps should never go through VPN
-            String[] defaultBypass = {"com.gtbank.gtworldapp","com.accessbank.accessbankapp","com.zenithbank.eazymoney","com.firstbanknigeria.firstmobile","ng.opay","com.palmpay.app","com.kuda.app"};
-            for (String pkg : defaultBypass) { try { builder.addDisallowedApplication(pkg); } catch (Exception e) {} }
+            // CRITICAL: Exclude WhatsApp entirely — VPN breaks WhatsApp calls (STUN/TURN/SRTP)
+            String[] alwaysBypass = {
+                "com.whatsapp",
+                "com.whatsapp.w4b",          // WhatsApp Business
+                "org.telegram.messenger",     // Telegram calls
+                "org.telegram.messenger.web",
+                "com.viber.voip",             // Viber calls
+                "com.skype.raider",           // Skype
+                "com.microsoft.teams",        // Teams
+                "us.zoom.videomeetings",      // Zoom
+                "com.gtbank.gtworldapp",      // Banking
+                "com.accessbank.accessbankapp",
+                "com.zenithbank.eazymoney",
+                "com.firstbanknigeria.firstmobile",
+                "ng.opay",
+                "com.palmpay.app",
+                "com.kuda.app"
+            };
+            for (String pkg : alwaysBypass) { try { builder.addDisallowedApplication(pkg); } catch (Exception e) {} }
 
-            // Split tunneling — exclude bypass apps
+            // Split tunneling — exclude user-saved protected apps from tunnel entirely
             SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
             String bypassList = sp.getString("bypass_apps", "");
             if (!bypassList.isEmpty()) {
                 for (String pkg : bypassList.split(",")) {
-                    try { builder.addDisallowedApplication(pkg.trim()); } catch (Exception e) {}
+                    String p = pkg.trim();
+                    if (!p.isEmpty()) {
+                        try { builder.addDisallowedApplication(p); } catch (Exception e) {}
+                    }
                 }
             }
 
@@ -159,9 +201,10 @@ public class DataSaverVpnService extends VpnService {
 
             new Thread(() -> processPackets(warmupEnd), "VPN-Packets").start();
             new Thread(this::detectForegroundApp, "VPN-FgDetect").start();
-
-            Log.i(TAG, "VPN started — Ads: " + adDomains.size() + " domains, BG Guard: ON");
-
+            new Thread(this::watchdog, "VPN-Watchdog").start();
+            new Thread(this::pollNotifications, "VPN-NotifPoll").start();
+            new Thread(this::reminderNotification, "VPN-Reminder").start();
+            Log.i(TAG, "VPN started - Ads: " + adDomains.size() + " domains, BG Guard: ON");
         } catch (Exception e) {
             Log.e(TAG, "VPN start failed: " + e.getMessage());
             stopVpn();
@@ -190,94 +233,150 @@ public class DataSaverVpnService extends VpnService {
      * Main packet processing loop.
      * Handles DNS packets: blocks ads, blocks background app DNS, forwards foreground DNS.
      */
+    private void enforceImageQualityByPlan() {
+        SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
+        String quality;
+        switch (userPlan) {
+            case "professional":
+            case "enterprise":  quality = "Low";    break; // most aggressive compression
+            case "premium":     quality = "Medium"; break;
+            default:            quality = "Low";    break; // free: forced low (least data)
+        }
+        sp.edit().putString("image_quality", quality).apply();
+    }
+
+    // Free plan daily ad block counter
+    private int dailyAdBlockCount = 0;
+    private long adBlockResetDay = 0;
+    private static final int FREE_AD_BLOCK_DAILY_LIMIT = 50;
+
+    private boolean canBlockAd() {
+        return true; // No limit - block all ads for all users
+    }
+
+    // Cache DNS server address — avoid repeated DNS lookups inside packet loop
+    private InetAddress cachedDnsServer = null;
+    // Cache bypass apps list — avoid SharedPreferences disk read on every packet
+    private volatile String cachedBypassApps = "";
+    private long bypassCacheTime = 0;
+
+    private String getBypassApps() {
+        long now = System.currentTimeMillis();
+        if (now - bypassCacheTime > 5000) {
+            cachedBypassApps = getSharedPreferences("datasaver", MODE_PRIVATE).getString("bypass_apps", "");
+            bypassCacheTime = now;
+        }
+        return cachedBypassApps;
+    }
+
+    private DatagramSocket createDnsSocket() {
+        try {
+            DatagramSocket s = new DatagramSocket();
+            protect(s);
+            s.setSoTimeout(2000);
+            return s;
+        } catch (Exception e) {
+            Log.e(TAG, "DNS socket failed: " + e.getMessage());
+            return null;
+        }
+    }
+
     private void processPackets(long warmupEnd) {
+        // Pre-resolve DNS server address once — never block inside loop
+        // Use hardcoded byte address - never call getByName() which uses DNS
+        try {
+            cachedDnsServer = InetAddress.getByAddress(new byte[]{1,1,1,1});
+        } catch (Exception e) {
+            try { cachedDnsServer = InetAddress.getByAddress(new byte[]{8,8,8,8}); } catch (Exception e2) {}
+        }
+
         FileInputStream in = new FileInputStream(vpnInterface.getFileDescriptor());
         FileOutputStream out = new FileOutputStream(vpnInterface.getFileDescriptor());
         byte[] packetData = new byte[32767];
 
-        DatagramSocket dnsSocket = null;
-        try {
-            dnsSocket = new DatagramSocket();
-            protect(dnsSocket);
-            dnsSocket.setSoTimeout(3000);
-        } catch (Exception e) {
-            Log.e(TAG, "DNS socket failed: " + e.getMessage());
-        }
+        DatagramSocket dnsSocket = createDnsSocket();
+        int dnsSocketErrors = 0;
 
         while (running) {
             try {
-                int length = in.read(packetData);
-                if (length <= 0) {
-                    Thread.sleep(10);
-                    continue;
-                }
+                int length = in.read(packetData, 0, packetData.length);
+                if (length <= 0) { try { Thread.sleep(1); } catch (InterruptedException ie) { break; } continue; }
 
                 totalPacketsProcessed.incrementAndGet();
 
                 int version = (packetData[0] >> 4) & 0xF;
-                if (version != 4 || length < 20) {
-                    out.write(packetData, 0, length);
-                    continue;
-                }
+                if (version != 4 || length < 20) { try { out.write(packetData, 0, length); } catch (Exception ignored) {} continue; }
 
                 int headerLength = (packetData[0] & 0xF) * 4;
                 int protocol = packetData[9] & 0xFF;
 
-                // Only handle UDP (DNS is UDP port 53)
                 if (protocol == 17 && length > headerLength + 8) {
                     int destPort = ((packetData[headerLength + 2] & 0xFF) << 8)
                         | (packetData[headerLength + 3] & 0xFF);
 
-                    if (destPort == 53 && dnsSocket != null) {
+                    if (destPort == 53 && dnsSocket != null && cachedDnsServer != null) {
                         int dnsOffset = headerLength + 8;
                         int dnsLength = length - dnsOffset;
                         if (dnsLength > 12) {
+                            // Count every DNS query (real metric)
+                            totalDnsQueries.incrementAndGet();
                             String domain = parseDnsQuery(packetData, dnsOffset, dnsLength);
-
                             if (domain != null) {
-                                // 1. AD BLOCKING — always block ad domains
                                 if (isAdDomain(domain)) {
-                                    if (System.currentTimeMillis() > warmupEnd) {
-                                        blockedAdRequests.incrementAndGet();
-                                        long estSize = getEstimatedAdSize(domain);
-                                        blockedAdBytes.addAndGet(estSize);
+                                    if (canBlockAd()) {
+                                        if (System.currentTimeMillis() > warmupEnd) {
+                                            blockedAdRequests.incrementAndGet();
+                                            // Track per-app blocked count (real)
+                                            String app = domainToPackage(domain);
+                                            if (app != null) {
+                                                perAppBlockedCount.computeIfAbsent(app, k -> new AtomicLong(0)).incrementAndGet();
+                                            }
+                                            saveBlockedApp(serviceRef, domain);
+                                        }
+                                        continue; // block it
                                     }
-                                    Log.d(TAG, "AD blocked: " + domain);
+                                    // Free limit hit — let ad through
+                                    forwardDns(dnsSocket, packetData, headerLength, dnsOffset, dnsLength, out);
                                     continue;
                                 }
-
-                                // 2. SYSTEM WHITELIST — always allow
                                 if (systemWhitelist.contains(domain)) {
                                     forwardDns(dnsSocket, packetData, headerLength, dnsOffset, dnsLength, out);
                                     continue;
                                 }
-
-                                // 3. BACKGROUND GUARD — block DNS for background apps
                                 if (shouldBlockBackground(domain)) {
                                     if (System.currentTimeMillis() > warmupEnd) {
                                         blockedBgSyncs.incrementAndGet();
-                                        long estSize = getEstimatedBgSize(domain);
-                                        blockedBgBytes.addAndGet(estSize);
+                                        // Track per-app blocked count (real)
+                                        String app = domainToPackage(domain);
+                                        if (app != null) {
+                                            perAppBlockedCount.computeIfAbsent(app, k -> new AtomicLong(0)).incrementAndGet();
+                                        }
                                     }
-                                    Log.d(TAG, "BG blocked: " + domain);
                                     continue;
                                 }
-
-                                // 4. FOREGROUND — allow, forward to Cloudflare
                                 forwardDns(dnsSocket, packetData, headerLength, dnsOffset, dnsLength, out);
                                 continue;
                             }
+                            // domain parse failed - forward anyway so apps dont break
+                            forwardDns(dnsSocket, packetData, headerLength, dnsOffset, dnsLength, out);
+                            continue;
                         }
                     }
                 }
-
-                // Non-DNS traffic: pass through
+                // All non-DNS traffic: write back to tunnel so it passes through normally
                 out.write(packetData, 0, length);
 
             } catch (Exception e) {
-                if (running) {
-                    try { Thread.sleep(100); } catch (InterruptedException ie) { break; }
+                if (!running) break;
+                // Recreate DNS socket if it goes bad — fixes stuck VPN on some phones
+                dnsSocketErrors++;
+                if (dnsSocketErrors > 10) {
+                    try { if (dnsSocket != null) dnsSocket.close(); } catch (Exception ignored) {}
+                    dnsSocket = createDnsSocket();
+                    dnsSocketErrors = 0;
+                    Log.w(TAG, "DNS socket recreated");
                 }
+                try { Thread.sleep(50); } catch (InterruptedException ie) { break; }
             }
         }
 
@@ -291,40 +390,29 @@ public class DataSaverVpnService extends VpnService {
      * We check if the domain belongs to a known app and if that app is NOT in the foreground.
      */
     private boolean shouldBlockBackground(String domain) {
-        // NEVER block these - they break calling, browsing, essential services
         if (domain.contains("whatsapp") || domain.contains("signal") ||
             domain.contains("telegram") || domain.contains("chrome") ||
             domain.contains("google.com") || domain.contains("googleapis.com") ||
             domain.contains("gstatic.com") || domain.contains("dropbox") ||
-            domain.contains("grok") || domain.contains("cloudflare") ||
-            domain.contains("akamai") || domain.contains("amazonaws") ||
-            domain.contains("microsoft") || domain.contains("apple.com") ||
-            domain.contains("icloud") || domain.contains("outlook") ||
-            domain.contains("office") || domain.contains("live.com") ||
-            domain.contains("banking") || domain.contains("paystack") ||
-            domain.contains("flutterwave")) return false;
-        // Basic plan: no background blocking
-        if ("basic".equals(userPlan)) return false;
- // Check if this domain belongs to a known app
- String appPackage = domainToPackage(domain);
+            domain.contains("cloudflare") || domain.contains("akamai") ||
+            domain.contains("amazonaws") || domain.contains("microsoft") ||
+            domain.contains("apple.com") || domain.contains("icloud") ||
+            domain.contains("outlook") || domain.contains("live.com") ||
+            domain.contains("paystack") || domain.contains("flutterwave")) return false;
+        if ("none".equals(userPlan)) return false;
+        String appPackage = domainToPackage(domain);
         if (appPackage == null) return false;
-        // If app is in user's protected list, never block
-        String bypassApps = getSharedPreferences("datasaver", MODE_PRIVATE).getString("bypass_apps", "");
-        if (bypassApps.contains(appPackage)) return false;
- // Premium: only block social media background
- if ("premium".equals(userPlan)) {
- boolean isSocial = appPackage.contains("facebook") || appPackage.contains("instagram") || appPackage.contains("tiktok") || appPackage.contains("musically") || appPackage.contains("twitter") || appPackage.contains("snapchat");
- if (!isSocial) return false;
- }
-
-        // If the app owning this domain is in the foreground, allow
+        // Use cached bypass list — not a disk read every packet
+        if (getBypassApps().contains(appPackage)) return false;
+        if ("premium".equals(userPlan)) {
+            boolean isSocial = appPackage.contains("facebook") || appPackage.contains("instagram")
+                || appPackage.contains("tiktok") || appPackage.contains("musically")
+                || appPackage.contains("twitter") || appPackage.contains("snapchat");
+            if (!isSocial) return false;
+        }
         if (appPackage.equals(foregroundPackage)) return false;
-
-        // If DataSaver background blocking is disabled, allow
         SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
         if (!sp.getBoolean("bg_block_enabled", true)) return false;
-
-        // This is a background app trying to use data — BLOCK
         return true;
     }
 
@@ -361,34 +449,6 @@ public class DataSaverVpnService extends VpnService {
     }
 
     /**
-     * Estimate how much data a blocked ad request would have downloaded.
-     */
-    private long getEstimatedAdSize(String domain) {
-        if (domain.contains("video") || domain.contains("vast")) return 5 * 1024 * 1024; // 5MB video ad
-        if (domain.contains("doubleclick") || domain.contains("googlesyndication")) return 200 * 1024; // 200KB
-        if (domain.contains("facebook") || domain.contains("instagram")) return 300 * 1024; // 300KB
-        return 50 * 1024; // 50KB default
-    }
-
-    /**
-     * Estimate how much data a blocked background request would have downloaded.
-     */
-    private long getEstimatedBgSize(String domain) {
-        for (String[] entry : BG_HEAVY_DOMAINS) {
-            if (domain.contains(entry[0]) || entry[0].contains(domain)) {
-                return Long.parseLong(entry[1]);
-            }
-        }
-        // Default estimates by app type
-        if (domain.contains("instagram") || domain.contains("cdninstagram")) return 500 * 1024; // 500KB - image prefetch
-        if (domain.contains("facebook") || domain.contains("fbcdn")) return 200 * 1024; // 200KB
-        if (domain.contains("tiktok") || domain.contains("byteoversea")) return 300 * 1024; // 300KB
-        if (domain.contains("youtube") || domain.contains("googlevideo")) return 1024 * 1024; // 1MB
-        if (domain.contains("play.google")) return 200 * 1024; // 200KB
-        return 100 * 1024; // 100KB default
-    }
-
-    /**
      * Forward a DNS query to Cloudflare 1.1.1.1 and write response back to tunnel.
      */
     private void forwardDns(DatagramSocket dnsSocket, byte[] packetData, int headerLength,
@@ -396,23 +456,17 @@ public class DataSaverVpnService extends VpnService {
         try {
             byte[] dnsPayload = new byte[dnsLength];
             System.arraycopy(packetData, dnsOffset, dnsPayload, 0, dnsLength);
-
-            InetAddress dnsServer = InetAddress.getByName("1.1.1.1");
-            DatagramPacket dnsRequest = new DatagramPacket(dnsPayload, dnsLength, dnsServer, 53);
+            // Use pre-resolved address — never call getByName() inside packet loop
+            DatagramPacket dnsRequest = new DatagramPacket(dnsPayload, dnsLength, cachedDnsServer, 53);
             dnsSocket.send(dnsRequest);
-
-            byte[] responseBuffer = new byte[1024];
+            byte[] responseBuffer = new byte[4096]; // DNS responses can be up to 4096 bytes
             DatagramPacket dnsResponse = new DatagramPacket(responseBuffer, responseBuffer.length);
             try {
                 dnsSocket.receive(dnsResponse);
                 byte[] fullResponse = buildDnsResponse(packetData, headerLength,
                     responseBuffer, dnsResponse.getLength());
-                if (fullResponse != null) {
-                    out.write(fullResponse);
-                }
-            } catch (java.net.SocketTimeoutException ste) {
-                // Timeout
-            }
+                if (fullResponse != null) { try { out.write(fullResponse); } catch (Exception ignored) {} }
+            } catch (java.net.SocketTimeoutException ste) { /* timeout is fine */ }
         } catch (Exception e) {
             Log.w(TAG, "DNS forward: " + e.getMessage());
         }
@@ -522,9 +576,9 @@ public class DataSaverVpnService extends VpnService {
             SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
             String phone = sp.getString("phone", "");
             if (phone.isEmpty()) return;
-            long totalSaved = blockedAdBytes.get() + blockedBgBytes.get();
             long totalBlocked = blockedAdRequests.get() + blockedBgSyncs.get();
-            // Fire and forget
+            long totalDns = totalDnsQueries.get();
+            // Fire and forget — only send real counts
             new Thread(() -> {
                 try {
                     java.net.URL url = new java.net.URL("https://datasaver-server.onrender.com/api/savings/sync");
@@ -534,13 +588,12 @@ public class DataSaverVpnService extends VpnService {
                     conn.setConnectTimeout(10000);
                     conn.setReadTimeout(10000);
                     conn.setDoOutput(true);
-                    String body = "{\"phone\":\"" + phone + "\",\"saved_bytes\":" + totalSaved
+                    String body = "{\"phone\":\"" + phone + "\""
                         + ",\"blocked_requests\":" + totalBlocked
-                        + ",\"ad_bytes\":" + blockedAdBytes.get()
-                        + ",\"bg_bytes\":" + blockedBgBytes.get() + "}";
+                        + ",\"total_dns\":" + totalDns + "}";
                     conn.getOutputStream().write(body.getBytes());
                     conn.getOutputStream().close();
-                    conn.getResponseCode(); // trigger the request
+                    conn.getResponseCode();
                 } catch (Exception e) {}
             }).start();
         } catch (Exception e) {}
@@ -564,6 +617,117 @@ public class DataSaverVpnService extends VpnService {
         }
     }
 
+    // Watchdog: if packet thread dies unexpectedly, restart it
+    public static void saveBlockedApp(android.content.Context ctx, String domain) {
+        if (ctx == null) return;
+        try {
+            String app = "Other";
+            if (domain.contains("facebook") || domain.contains("fbcdn") || domain.contains("fb.com")) app = "Facebook";
+            else if (domain.contains("instagram") || domain.contains("cdninstagram")) app = "Instagram";
+            else if (domain.contains("tiktok") || domain.contains("musical") || domain.contains("byteoversea")) app = "TikTok";
+            else if (domain.contains("twitter") || domain.contains("twimg")) app = "Twitter/X";
+            else if (domain.contains("youtube") || domain.contains("googlevideo") || domain.contains("ytimg")) app = "YouTube";
+            else if (domain.contains("doubleclick") || domain.contains("googlesyndication") || domain.contains("googleads")) app = "Google Ads";
+            else if (domain.contains("amazon-adsystem")) app = "Amazon Ads";
+            else if (domain.contains("snapchat") || domain.contains("snap.com")) app = "Snapchat";
+            else if (domain.contains("linkedin")) app = "LinkedIn";
+            else if (domain.contains("applovin") || domain.contains("admob") || domain.contains("adnxs")) app = "Ad Network";
+            String today = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(new java.util.Date());
+            android.content.SharedPreferences sp = ctx.getSharedPreferences("datasaver_blocks", android.content.Context.MODE_PRIVATE);
+            String key = "blocked_" + today + "_" + app;
+            sp.edit().putInt(key, sp.getInt(key, 0) + 1).apply();
+            String dates = sp.getString("block_dates", "");
+            if (!dates.contains(today)) sp.edit().putString("block_dates", dates.isEmpty() ? today : dates + "," + today).apply();
+        } catch (Exception e) {}
+    }
+
+    private void watchdog() {
+        while (running) {
+            try {
+                Thread.sleep(15000); // check every 15s
+                if (!running) break;
+                // If VPN interface is still valid but packets stopped, log it
+                if (vpnInterface != null && totalPacketsProcessed.get() == 0) {
+                    Log.w(TAG, "Watchdog: no packets processed yet - VPN may be idle");
+                }
+            } catch (InterruptedException e) { break; }
+            catch (Exception e) { Log.w(TAG, "Watchdog error: " + e.getMessage()); }
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+    private ServerSocket logServerSocket = null;
+
+    private void runLogServer() {
+        try {
+            logServerSocket = new ServerSocket(LOG_PORT);
+            // ServerSocket binds locally - no protect needed
+            addLog("INFO", "LogServer", "Live log server started on port " + LOG_PORT);
+            while (running) {
+                try {
+                    Socket client = logServerSocket.accept();
+                    new Thread(() -> handleLogRequest(client)).start();
+                } catch (Exception e) {
+                    if (!running) break;
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Log server error: " + e.getMessage());
+        }
+    }
+
+    private void handleLogRequest(Socket client) {
+        try {
+            // Read HTTP request (ignore it)
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(client.getInputStream()));
+            String requestLine = br.readLine();
+            while (br.ready()) br.readLine(); // drain headers
+
+            PrintWriter pw = new PrintWriter(client.getOutputStream(), true);
+
+            // Build JSON response
+            StringBuilder json = new StringBuilder();
+            json.append("{\"packets\":").append(totalPacketsProcessed.get());
+            json.append(",\"blocked\":").append(blockedAdRequests.get() + blockedBgSyncs.get());
+            json.append(",\"total_dns\":").append(totalDnsQueries.get());
+            json.append(",\"running\":").append(running);
+            json.append(",\"logs\":[");
+            synchronized (logLock) {
+                boolean first = true;
+                for (String entry : liveLog) {
+                    if (!first) json.append(",");
+                    // Escape for JSON
+                    String escaped = entry.replace("\\", "\\\\").replace("\"", "\\\"");
+                    json.append("\"").append(escaped).append("\"");
+                    first = false;
+                }
+            }
+            json.append("]}");
+
+            String body = json.toString();
+            pw.println("HTTP/1.1 200 OK");
+            pw.println("Content-Type: application/json");
+            pw.println("Access-Control-Allow-Origin: *");
+            pw.println("Content-Length: " + body.getBytes().length);
+            pw.println("Connection: close");
+            pw.println();
+            pw.print(body);
+            pw.flush();
+            client.close();
+        } catch (Exception e) {
+            try { client.close(); } catch (Exception ignored) {}
+        }
+    }
+
     private void stopVpn() {
         // Persist savings before stopping
         persistSavings();
@@ -579,7 +743,7 @@ public class DataSaverVpnService extends VpnService {
         stopForeground(true);
         stopSelf();
         Log.i(TAG, "VPN stopped. Ads: " + blockedAdRequests.get() + ", BG: " + blockedBgSyncs.get()
-            + ", Saved: " + ((blockedAdBytes.get() + blockedBgBytes.get()) / 1024) + " KB");
+            + ", DNS: " + totalDnsQueries.get());
     }
 
     /** Save counters to SharedPreferences so they survive restarts */
@@ -587,11 +751,11 @@ public class DataSaverVpnService extends VpnService {
         try {
             SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
             sp.edit()
-                .putLong("real_ad_bytes", blockedAdBytes.get())
-                .putLong("real_bg_bytes", blockedBgBytes.get())
                 .putLong("real_ad_requests", blockedAdRequests.get())
                 .putLong("real_bg_syncs", blockedBgSyncs.get())
+                .putLong("real_total_dns", totalDnsQueries.get())
                 .putLong("real_total_packets", totalPacketsProcessed.get())
+                .putString("savings_date", currentSavingsDate)
                 .apply();
         } catch (Exception e) {
             Log.w(TAG, "Failed to persist savings: " + e.getMessage());
@@ -602,20 +766,27 @@ public class DataSaverVpnService extends VpnService {
     private void restoreSavings() {
         try {
             SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
-            // Never go backwards - use max of current and saved
-            long sAd = sp.getLong("real_ad_bytes", 0);
-            long sBg = sp.getLong("real_bg_bytes", 0);
-            long sAdR = sp.getLong("real_ad_requests", 0);
-            long sBgS = sp.getLong("real_bg_syncs", 0);
-            if (sAd > blockedAdBytes.get()) blockedAdBytes.set(sAd);
-            if (sBg > blockedBgBytes.get()) blockedBgBytes.set(sBg);
-            if (sAdR > blockedAdRequests.get()) blockedAdRequests.set(sAdR);
-            if (sBgS > blockedBgSyncs.get()) blockedBgSyncs.set(sBgS);
-
-
+            blockedAdRequests.set(sp.getLong("real_ad_requests", 0));
+            blockedBgSyncs.set(sp.getLong("real_bg_syncs", 0));
+            totalDnsQueries.set(sp.getLong("real_total_dns", 0));
             totalPacketsProcessed.set(sp.getLong("real_total_packets", 0));
-            Log.i(TAG, "Restored savings: ads=" + blockedAdRequests.get() + " bg=" + blockedBgSyncs.get());
+            currentSavingsDate = sp.getString("savings_date", "");
+            Log.i(TAG, "Restored: ads=" + blockedAdRequests.get() + " bg=" + blockedBgSyncs.get() + " dns=" + totalDnsQueries.get());
         } catch (Exception e) {}
+    }
+
+    /** Reset daily counters if it's a new day */
+    private void checkDailyReset() {
+        String today = new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            .format(new java.util.Date());
+        if (!today.equals(currentSavingsDate) && !currentSavingsDate.isEmpty()) {
+            Log.i(TAG, "Daily reset: " + currentSavingsDate + " -> " + today);
+            blockedAdRequests.set(0);
+            blockedBgSyncs.set(0);
+            totalDnsQueries.set(0);
+            perAppBlockedCount.clear();
+        }
+        currentSavingsDate = today;
     }
 
     @Override
@@ -630,6 +801,156 @@ public class DataSaverVpnService extends VpnService {
                 CHANNEL_ID, "DataSaver VPN", NotificationManager.IMPORTANCE_LOW);
             ch.setDescription("DataSaver is protecting your data");
             getSystemService(NotificationManager.class).createNotificationChannel(ch);
+
+            // Push notification channel — high importance so notifications appear as popups
+            NotificationChannel pushCh = new NotificationChannel(
+                NOTIF_CHANNEL_ID, "DataSaver Alerts", NotificationManager.IMPORTANCE_HIGH);
+            pushCh.setDescription("Notifications from DataSaver");
+            pushCh.enableVibration(true);
+            getSystemService(NotificationManager.class).createNotificationChannel(pushCh);
+        }
+    }
+
+    /**
+     * Built-in reminder notification every 10 minutes.
+     * Tells user to keep using DataSaver.
+     */
+    private void reminderNotification() {
+        // Wait 10 minutes before first reminder
+        try { Thread.sleep(10 * 60 * 1000); } catch (InterruptedException ie) { return; }
+        int reminderId = 90000; // Fixed ID so it replaces itself each time
+        while (running) {
+            try {
+                SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
+                boolean pushEnabled = sp.getBoolean("push_notif", true);
+                if (pushEnabled) {
+                    NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                    if (nm != null) {
+                        Intent openIntent = new Intent(this, MainActivity.class);
+                        PendingIntent pi = PendingIntent.getActivity(this, reminderId, openIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                        Notification.Builder nb;
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            nb = new Notification.Builder(this, NOTIF_CHANNEL_ID);
+                        } else {
+                            nb = new Notification.Builder(this);
+                            nb.setPriority(Notification.PRIORITY_DEFAULT);
+                        }
+                        Notification notif = nb
+                            .setContentTitle("DataSaver is working")
+                            .setContentText("Keep DataSaver running to block ads and save your data! \uD83D\uDCA1")
+                            .setSmallIcon(android.R.drawable.ic_dialog_info)
+                            .setAutoCancel(true)
+                            .setContentIntent(pi)
+                            .build();
+                        nm.notify(reminderId, notif);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Reminder notif error: " + e.getMessage());
+            }
+            // Wait another 10 minutes
+            try { Thread.sleep(10 * 60 * 1000); } catch (InterruptedException ie) { break; }
+        }
+    }
+
+    /**
+     * Poll server for new notifications every 2 minutes.
+     * Shows Android notification when new ones arrive.
+     */
+    private void pollNotifications() {
+        // Wait 10 seconds after VPN start before first poll
+        try { Thread.sleep(10000); } catch (InterruptedException ie) { return; }
+        while (running) {
+            try {
+                SharedPreferences sp = getSharedPreferences("datasaver", MODE_PRIVATE);
+                String phone = sp.getString("phone", "");
+                boolean pushEnabled = sp.getBoolean("push_notif", true);
+                if (!phone.isEmpty() && pushEnabled) {
+                    fetchAndShowNotifications(phone);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Notif poll error: " + e.getMessage());
+            }
+            try { Thread.sleep(NOTIF_POLL_INTERVAL); } catch (InterruptedException ie) { break; }
+        }
+    }
+
+    private void fetchAndShowNotifications(String phone) {
+        try {
+            long lastId = getSharedPreferences("datasaver", MODE_PRIVATE).getLong("last_notif_id", 0);
+            java.net.URL url = new java.net.URL(SERVER_URL + "/api/notifications?phone=" + phone + "&since_id=" + lastId);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            int code = conn.getResponseCode();
+            if (code != 200) return;
+            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+            reader.close();
+            JSONArray arr = new JSONArray(sb.toString());
+            if (arr.length() == 0) return;
+
+            // Show each new notification
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject notif = arr.getJSONObject(i);
+                long notifId = notif.optLong("id", 0);
+                String title = notif.optString("title", "DataSaver");
+                String body = notif.optString("body", "");
+                String type = notif.optString("type", "general");
+                if (notifId > lastId) {
+                    showPushNotification(notifId, title, body, type);
+                    lastId = notifId;
+                    unreadNotifCount++;
+                    latestNotifTitle = title;
+                    latestNotifBody = body;
+                    hasNewNotif = true;
+                }
+            }
+            // Save the latest notification ID
+            getSharedPreferences("datasaver", MODE_PRIVATE).edit()
+                .putLong("last_notif_id", lastId).apply();
+            lastNotifId = lastId;
+        } catch (Exception e) {
+            // Server unreachable — fine, will retry next cycle
+        }
+    }
+
+    private void showPushNotification(long notifId, String title, String body, String type) {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+
+            Intent openIntent = new Intent(this, MainActivity.class);
+            openIntent.putExtra("open_notifications", true);
+            PendingIntent pi = PendingIntent.getActivity(this, (int) notifId, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            int icon = android.R.drawable.ic_dialog_info;
+            if ("promo".equals(type)) icon = android.R.drawable.star_big_on;
+            else if ("reward".equals(type)) icon = android.R.drawable.btn_star;
+            else if ("alert".equals(type)) icon = android.R.drawable.ic_dialog_alert;
+
+            Notification.Builder nb;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                nb = new Notification.Builder(this, NOTIF_CHANNEL_ID);
+            } else {
+                nb = new Notification.Builder(this);
+                nb.setPriority(Notification.PRIORITY_HIGH);
+            }
+            Notification notif = nb
+                .setContentTitle(title)
+                .setContentText(body)
+                .setSmallIcon(icon)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build();
+            nm.notify((int) notifId, notif);
+        } catch (Exception e) {
+            Log.w(TAG, "Show notif error: " + e.getMessage());
         }
     }
 

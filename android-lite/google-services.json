@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "988256496473",
+    "project_id": "acorn-data-saver-app",
+    "storage_bucket": "acorn-data-saver-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:988256496473:android:395bb2c17ef6e15e70ba48",
+        "android_client_info": {
+          "package_name": "com.datasaver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBD_R9A3tMC2LUowelweG-hBORFdo87DGs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

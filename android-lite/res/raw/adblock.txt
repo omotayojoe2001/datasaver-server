@@ -1,187 +1,175 @@
-ads.facebook.com
-an.facebook.com
-ad.doubleclick.net
+# Acorn Datasaver Ad Block List
+# Only domain names - no paths, no slashes
+
+# Google Ads
+ads.google.com
+adservice.google.com
 pagead2.googlesyndication.com
 googleads.g.doubleclick.net
 tpc.googlesyndication.com
-ads.google.com
-adservice.google.com
-analytics.google.com
+ad.doubleclick.net
+googleads4.g.doubleclick.net
+securepubads.g.doubleclick.net
+pubads.g.doubleclick.net
+pagead.l.doubleclick.net
+fls.doubleclick.net
+stats.g.doubleclick.net
+cm.g.doubleclick.net
+adclick.g.doubleclick.net
 www.googleadservices.com
 partner.googleadservices.com
-ad.lgappstv.com
-ads.yahoo.com
+www.googletagmanager.com
+www.googletagservices.com
+fundingchoicesmessages.google.com
+
+# Google Analytics
+analytics.google.com
+ssl.google-analytics.com
+www.google-analytics.com
+app-measurement.com
+
+# Facebook/Meta Ads
+ads.facebook.com
+an.facebook.com
+pixel.facebook.com
+connect.facebook.net
+staticxx.facebook.com
+tr.facebook.com
+graph.facebook.com
+
+# Instagram Ads
+ads.instagram.com
+graph.instagram.com
+
+# Twitter/X Ads
 ads.twitter.com
 ads-api.twitter.com
 advertising.twitter.com
+static.ads-twitter.com
+syndication.twitter.com
+analytics.twitter.com
+
+# TikTok Ads
 ads.tiktok.com
 analytics.tiktok.com
 log.tiktokv.com
 mon.tiktokv.com
-ads.instagram.com
-graph.instagram.com
-pixel.facebook.com
-www.facebook.com/tr
-connect.facebook.net
-static.ads-twitter.com
-app-measurement.com
-firebase-settings.crashlytics.com
-settings.crashlytics.com
-e.crashlytics.com
-reports.crashlytics.com
-pagead.l.doubleclick.net
-ad.mo.doubleclick.net
-fls.doubleclick.net
-stats.g.doubleclick.net
-cm.g.doubleclick.net
-s0.2mdn.net
-z.moatads.com
-px.moatads.com
-js.moatads.com
-geo.moatads.com
+analytics-sg.tiktok.com
+mon-va.tiktokv.com
+log-va.tiktokv.com
+applog.musical.ly
+ib.tiktokv.com
+
+# Snapchat
+sc-analytics.appspot.com
+app-analytics.snapchat.com
+
+# LinkedIn Ads
+ads.linkedin.com
+px.ads.linkedin.com
+dc.ads.linkedin.com
+
+# Yahoo Ads
+ads.yahoo.com
+ssp.yahoo.com
+udc.yahoo.com
+
+# AppNexus/Xandr
 ib.adnxs.com
 mediation.adnxs.com
 acdn.adnxs.com
 cdn.adnxs.com
 secure.adnxs.com
-ad.turn.com
-ads.pubmatic.com
-image6.pubmatic.com
-ssp.yahoo.com
-ads.yahoo.com
-udc.yahoo.com
-udcm.yahoo.com
-media.net
-static.media.net
-contextual.media.net
-ad.smartadserver.com
-ww251.smartadserver.com
-mobile.smartadserver.com
-sdk.tapjoy.com
-ads.mopub.com
-c.amazon-adsystem.com
-aax.amazon-adsystem.com
-s.amazon-adsystem.com
-ad.smaato.net
-soma.smaato.net
+
+# Criteo
 gum.criteo.com
 bidder.criteo.com
 dis.criteo.com
-ads.linkedin.com
-px.ads.linkedin.com
-dc.ads.linkedin.com
-ad.youtube.com
-ads.youtube.com
-www.youtube.com/pagead
-www.youtube.com/ptracking
-s.youtube.com/api/stats
-yt3.ggpht.com/generate_204
-googleads4.g.doubleclick.net
-securepubads.g.doubleclick.net
-pubads.g.doubleclick.net
-ad-delivery.net
-serving-sys.com
-bs.serving-sys.com
-adserver.adtechus.com
-adtechus.com
+
+# Moat
+z.moatads.com
+px.moatads.com
+js.moatads.com
+
+# Amazon Ads
+c.amazon-adsystem.com
+aax.amazon-adsystem.com
+s.amazon-adsystem.com
+
+# Unity Ads
+ad.unityads.unity3d.com
+auction.unityads.unity3d.com
+config.unityads.unity3d.com
+adserver.unityads.unity3d.com
+
+# AdMob
+ads.admob.com
+e.admob.com
+media.admob.com
+
+# AppLovin
+a.applovin.com
+d.applovin.com
+ms.applovin.com
+rt.applovin.com
+img.applovin.com
+
+# Vungle
+ad.vungle.com
+api.vungle.com
+
+# InMobi
+ads.inmobi.com
+sdkconfig.inmobi.com
+api.inmobi.com
+
+# Chartboost
+ads.chartboost.com
+live.chartboost.com
+
+# StartApp
+ad.startappservice.com
+init.startappservice.com
+infoevent.startappservice.com
+
+# IronSource
+init.supersonicads.com
+outcome-ssp.supersonicads.com
+
+# Flurry
 data.flurry.com
 ads.flurry.com
 cfg.flurry.com
-graph.facebook.com/network_ads
-an.facebook.com/placementbid
-edge.quantserve.com
-pixel.quantserve.com
-secure.quantserve.com
-ad.atdmt.com
-view.atdmt.com
-clk.atdmt.com
-cdn.branch.io
-api2.branch.io
+
+# Taboola
+cdn.taboola.com
+trc.taboola.com
+
+# Outbrain
+widgets.outbrain.com
+odb.outbrain.com
+
+# Crashlytics
+firebase-settings.crashlytics.com
+settings.crashlytics.com
+e.crashlytics.com
+reports.crashlytics.com
+
+# Attribution/Tracking
 app.adjust.com
 s2s.adjust.com
-view.adjust.com
 cdn.adjust.com
 app.appsflyer.com
 t.appsflyer.com
 launches.appsflyer.com
 conversions.appsflyer.com
 impression.appsflyer.com
+cdn.branch.io
+api2.branch.io
+control.kochava.com
+api.kochava.com
 
-# More Google ads
-adclick.g.doubleclick.net
-www.googletagmanager.com
-www.googletagservices.com
-googletagmanager.com
-ssl.google-analytics.com
-www.google-analytics.com
-fundingchoicesmessages.google.com
-pagead2.googlesyndication.com
-tpc.googlesyndication.com
-www.googleadservices.com
-
-# Facebook/Meta trackers
-pixel.facebook.com
-an.facebook.com
-staticxx.facebook.com
-web.facebook.com/tr
-business.facebook.com/tr
-tr.facebook.com
-
-# TikTok trackers
-analytics-sg.tiktok.com
-mon-va.tiktokv.com
-log-va.tiktokv.com
-log2-applog.feiliao.com
-applog.musical.ly
-ib.tiktokv.com
-
-# Twitter/X
-syndication.twitter.com
-analytics.twitter.com
-ads-api.twitter.com
-t.co/i/adsct
-
-# Snapchat
-sc-analytics.appspot.com
-app-analytics.snapchat.com
-gcp-us-east1.api.snapchat.com
-
-# General ad networks
-ad.ironSource.com
-is-sdk.com
-init.supersonicads.com
-outcome-ssp.supersonicads.com
-ad.unityads.unity3d.com
-auction.unityads.unity3d.com
-config.unityads.unity3d.com
-adserver.unityads.unity3d.com
-ads.inmobi.com
-sdkconfig.inmobi.com
-api.inmobi.com
-sdk.inmobi.com
-ads.admob.com
-pagead2.googlesyndication.com
-e.admob.com
-media.admob.com
-ad.startappservice.com
-init.startappservice.com
-infoevent.startappservice.com
-imp.startappservice.com
-ads.chartboost.com
-live.chartboost.com
-a.applovin.com
-d.applovin.com
-ms.applovin.com
-rt.applovin.com
-img.applovin.com
-pdn.applovin.com
-ms.applvn.com
-ad.vungle.com
-api.vungle.com
-ads.api.vungle.com
-
-# Analytics/Tracking
-amplitude.com
+# Analytics SDKs
 api.amplitude.com
 cdn.amplitude.com
 api.mixpanel.com
@@ -189,40 +177,43 @@ cdn.mxpnl.com
 decide.mixpanel.com
 api.segment.io
 cdn.segment.com
-api.branch.io
-cdn.branch.io
-bnc.lt
-app.link
-links.adjust.com
-app.adjust.com
-control.kochava.com
-api.kochava.com
 
-# Nigerian specific ad networks
+# Scorecard Research
+sb.scorecardresearch.com
+b.scorecardresearch.com
+
+# Microsoft Ads
+bat.bing.com
+ads.msn.com
+flex.msn.com
+
+# Nigerian Ad Networks
 ads.naij.com
 ads.pulse.ng
 ads.legit.ng
 ads.vanguardngr.com
 
-# More trackers
-scorecardresearch.com
-sb.scorecardresearch.com
-b.scorecardresearch.com
-beacon.krxd.net
-cdn.krxd.net
-consumer.krxd.net
-usermatch.krxd.net
-widgets.outbrain.com
-log.outbrainimg.com
-odb.outbrain.com
-cdn.taboola.com
-trc.taboola.com
-nr-data.net
+# New Relic
 bam.nr-data.net
 js-agent.newrelic.com
-bat.bing.com
-c.bing.com
-c.msn.com
-ads.msn.com
-a.ads.msn.com
-flex.msn.com
+
+# Media.net
+static.media.net
+contextual.media.net
+
+# Smart AdServer
+ad.smartadserver.com
+mobile.smartadserver.com
+
+# Pubmatic
+ads.pubmatic.com
+image6.pubmatic.com
+
+# Smaato
+ad.smaato.net
+soma.smaato.net
+
+# Quantcast
+edge.quantserve.com
+pixel.quantserve.com
+secure.quantserve.com
