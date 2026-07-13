@@ -752,67 +752,6 @@ app.post('/api/wallet/topup', async (req, res) => {
 // TASKS & EARN
 // ============================================
 
-// MORE SPECIFIC TASK ROUTES (must come BEFORE /api/tasks)
-// GET /api/tasks/all — admin: get all tasks
-app.get('/api/tasks/all', adminAuth, async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Also support /admin/api/tasks/all
-app.get('/admin/api/tasks/all', adminAuth, async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/tasks/create — admin: create task
-app.post('/api/tasks/create', adminAuth, async (req, res) => {
-  try {
-    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
-    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
-    
-    const { data, error } = await supabase.from('tasks').insert({
-      title, description, reward, reward_type: reward_type || 'airtime',
-      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
-      proof_required: proof_required || false, active: active !== false
-    });
-    
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Also support /admin/api/tasks/create
-app.post('/admin/api/tasks/create', adminAuth, async (req, res) => {
-  try {
-    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
-    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
-    
-    const { data, error } = await supabase.from('tasks').insert({
-      title, description, reward, reward_type: reward_type || 'airtime',
-      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
-      proof_required: proof_required || false, active: active !== false
-    });
-    
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // TASKS & EARN
 app.post('/api/tasks/submit', async (req, res) => {
   const { phone, task_id, proof_base64 } = req.body;
@@ -937,7 +876,79 @@ app.get('/api/tasks', async (req, res) => {
   }
 });
 
-// ADMIN SUBMISSIONS API (for admin panel)
+// ADMIN PANEL API (for admin-vercel)
+// Password check middleware
+const ADMIN_PW = process.env.ADMIN_PW || 'admin123';
+const adminAuth = (req, res, next) => {
+  const pw = req.headers['x-admin-password'];
+  if (pw !== ADMIN_PW) {
+    return res.status(403).json({ error: 'Invalid admin password' });
+  }
+  next();
+};
+
+// ADMIN TASK ROUTES
+// GET /api/tasks/all — admin: get all tasks
+app.get('/api/tasks/all', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Also support /admin/api/tasks/all
+app.get('/admin/api/tasks/all', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/tasks/create — admin: create task
+app.post('/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title, description, reward, reward_type: reward_type || 'airtime',
+      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
+      proof_required: proof_required || false, active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Also support /admin/api/tasks/create
+app.post('/admin/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title, description, reward, reward_type: reward_type || 'airtime',
+      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
+      proof_required: proof_required || false, active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ADMIN SUBMISSIONS API
 // Get all task submissions
 app.get('/api/submissions', adminAuth, async (req, res) => {
   try {
@@ -961,14 +972,11 @@ app.post('/api/submissions/:id/approve', adminAuth, async (req, res) => {
     
     await supabase.from('task_submissions').update({ status: 'approved' }).eq('id', id);
     
-    // Credit user wallet
     const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('id', sub.user_id).single();
     if (user) {
       const reward = sub.tasks?.reward || 0;
       const newBalance = (parseFloat(user.wallet_balance) || 0) + reward;
       await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
-      
-      // Log transaction
       await supabase.from('wallet_transactions').insert({
         user_id: user.id,
         type: 'task_reward',
@@ -993,17 +1001,6 @@ app.post('/api/submissions/:id/reject', adminAuth, async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
-// ADMIN PANEL API (for admin-vercel)
-// Password check middleware
-const ADMIN_PW = process.env.ADMIN_PW || 'admin123';
-const adminAuth = (req, res, next) => {
-  const pw = req.headers['x-admin-password'];
-  if (pw !== ADMIN_PW) {
-    return res.status(403).json({ error: 'Invalid admin password' });
-  }
-  next();
-};
 
 // Dashboard
 app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
