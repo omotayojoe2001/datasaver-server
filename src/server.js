@@ -928,7 +928,7 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
     const { data: walletTxns } = await supabase.from('wallet_transactions').select('amount, type').eq('type', 'credit') || { data: [] };
     const depositsTotal = walletTxns?.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0) || 0;
     
-    // Profit = deposits - spent
+    // Profit = deposits - spent (assuming spent = total revenue from data/airtime)
     const profit = depositsTotal - revenueTotal;
     
     // Pending tasks
@@ -961,17 +961,21 @@ app.get('/admin/api/test-new-route', adminAuth, async (req, res) => {
 // Users
 app.get('/admin/api/all-users', adminAuth, async (req, res) => {
   try {
-    const { page = 1, search = '' } = req.query;
-    const limit = 20;
-    // Get all users
-    let query = supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
-    if (search) {
-      query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
+    console.log('=== ADMIN USERS ENDPOINT CALLED ===');
+    console.log('Query params:', req.query);
+    console.log('Supabase URL:', SUPABASE_URL ? 'exists' : 'missing');
+    
+    const result = await supabase.from('users').select('*').order('created_at', { ascending: false }).limit(50);
+    console.log('Result:', JSON.stringify(result).substring(0, 500));
+    
+    if (result.error) {
+      console.log('Error:', result.error);
+      return res.status(500).json({ error: result.error.message });
     }
-    const { data, error } = await query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ users: data || [], total: data?.length || 0 });
+    
+    res.json({ users: result.data || [], total: result.data?.length || 0 });
   } catch (e) {
+    console.log('Exception:', e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -1408,4 +1412,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`API: http://localhost:${PORT}/api/plans`);
   console.log(`Proxy: http://localhost:${PORT}/proxy?url=https://example.com`);
 });
+
+
 
