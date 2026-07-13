@@ -940,13 +940,15 @@ app.post('/admin/api/tasks/create', adminAuth, async (req, res) => {
     const { data, error } = await supabase.from('tasks').insert({
       title,
       description: description || instructions || '',
+      instructions: instructions || '',
+      link: link || '',
       reward,
       reward_type: reward_type || type || 'airtime',
       active: true
     });
     
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+    res.json({ success: true, data });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1785,10 +1787,12 @@ app.post('/api/tasks/:id/update', adminAuth, async (req, res) => {
 app.post('/admin/api/tasks/:id/update', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, reward, reward_type, active } = req.body;
+    const { title, description, instructions, link, reward, reward_type, active } = req.body;
     const updates = {};
     if (title) updates.title = title;
     if (description !== undefined) updates.description = description;
+    if (instructions !== undefined) updates.instructions = instructions;
+    if (link !== undefined) updates.link = link;
     if (reward) updates.reward = reward;
     if (reward_type) updates.reward_type = reward_type;
     if (active !== undefined) updates.active = active;
@@ -1851,7 +1855,7 @@ app.get('/admin/api/wallet-transactions', adminAuth, async (req, res) => {
     if (type && type !== 'all') query = query.eq('type', type);
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
+    res.json({ transactions: data || [], total: data?.length || 0 });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
