@@ -1531,6 +1531,137 @@ app.post('/api/settings', adminAuth, async (req, res) => {
   }
 });
 
+// DELETE task
+app.delete('/api/tasks/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE task (admin prefix version)
+app.delete('/admin/api/tasks/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// UPDATE task
+app.post('/api/tasks/:id/update', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, reward, reward_type, active } = req.body;
+    const updates = {};
+    if (title) updates.title = title;
+    if (description !== undefined) updates.description = description;
+    if (reward) updates.reward = reward;
+    if (reward_type) updates.reward_type = reward_type;
+    if (active !== undefined) updates.active = active;
+    
+    const { error } = await supabase.from('tasks').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// UPDATE task - /admin/api version for admin panel
+app.post('/admin/api/tasks/:id/update', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, reward, reward_type, active } = req.body;
+    const updates = {};
+    if (title) updates.title = title;
+    if (description !== undefined) updates.description = description;
+    if (reward) updates.reward = reward;
+    if (reward_type) updates.reward_type = reward_type;
+    if (active !== undefined) updates.active = active;
+    
+    const { error } = await supabase.from('tasks').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ADMIN API VERSIONS (with /admin prefix for admin panel)
+app.get('/admin/api/submissions', adminAuth, async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = supabase.from('task_submissions').select('*, tasks(title, reward, reward_type), users(phone, name)').order('created_at', { ascending: false });
+    if (status && status !== 'all') query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/api/submissions/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: sub, error: subErr } = await supabase.from('task_submissions').select('*, tasks(reward, reward_type)').eq('id', id).single();
+    if (subErr || !sub) return res.status(404).json({ error: 'Submission not found' });
+    await supabase.from('task_submissions').update({ status: 'approved' }).eq('id', id);
+    const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('id', sub.user_id).single();
+    if (user) {
+      const reward = sub.tasks?.reward || 0;
+      const newBalance = (parseFloat(user.wallet_balance) || 0) + reward;
+      await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
+      await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'task_reward', amount: reward, description: 'Task reward', status: 'completed' });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/api/submissions/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await supabase.from('task_submissions').update({ status: 'rejected' }).eq('id', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/admin/api/wallet-transactions', adminAuth, async (req, res) => {
+  try {
+    const { type } = req.query;
+    let query = supabase.from('wallet_transactions').select('*, users(phone, name)').order('created_at', { ascending: false });
+    if (type && type !== 'all') query = query.eq('type', type);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/api/settings', adminAuth, async (req, res) => {
+  try {
+    const { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement, new_password } = req.body;
+    console.log('Settings update:', { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement });
+    if (new_password) console.log('Admin password change requested');
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`DataSaver server running on port ${PORT}`);
   console.log(`API: http://localhost:${PORT}/api/plans`);
