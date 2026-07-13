@@ -827,12 +827,8 @@ app.post('/api/tasks/claim', async (req, res) => {
 });
 
 // ============================================
-// ADMIN PANEL
+// ADMIN PANEL (deployed separately via admin-vercel)
 // ============================================
-const adminRoutes = require('./admin/routes.js')(supabase);
-const path = require('path');
-app.use('/admin', adminRoutes);
-app.get('/admin', (req, res) => { res.sendFile(path.join(__dirname, 'admin', 'admin.html')); });
 
 // ============================================
 // PRIVACY POLICY
