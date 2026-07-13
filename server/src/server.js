@@ -816,8 +816,38 @@ app.get('/api/tasks/all', adminAuth, async (req, res) => {
   }
 });
 
+// Also support /admin/api/tasks/all
+app.get('/admin/api/tasks/all', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/tasks/create — admin: create task
 app.post('/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title, description, reward, reward_type: reward_type || 'airtime',
+      min_plan: min_plan || 'none', daily_limit: daily_limit || 1,
+      proof_required: proof_required || false, active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Also support /admin/api/tasks/create
+app.post('/admin/api/tasks/create', adminAuth, async (req, res) => {
   try {
     const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
     if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
