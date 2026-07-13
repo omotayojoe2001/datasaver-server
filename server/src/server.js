@@ -20,6 +20,37 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ============================================
+// FIREBASE ADMIN (for push notifications)
+// ============================================
+let admin = null;
+try {
+    // Service account from env var or Render secret
+    const serviceAccount = {
+        type: "service_account",
+        project_id: process.env.FIREBASE_PROJECT_ID || "acorn-data-saver-app",
+        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+        private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+        client_id: process.env.FIREBASE_CLIENT_ID,
+        auth_uri: "https://accounts.google.com/o/oauth2/auth",
+        token_uri: "https://oauth2.googleapis.com/token",
+        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+        client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
+    };
+    if (serviceAccount.private_key && serviceAccount.client_email) {
+        admin = require('firebase-admin');
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        console.log('Firebase Admin initialized');
+    } else {
+        console.log('Firebase credentials not configured - push notifications disabled');
+    }
+} catch (e) {
+    console.log('Firebase init failed:', e.message);
+}
+
 // DataStation API config
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
 const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN;
@@ -121,6 +152,21 @@ app.post('/api/register', async (req, res) => {
     }
 
     res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'none', referral_code: data.referral_code, message: 'Account created' + referralMsg });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/fcm-token  { phone, fcm_token }
+// Register FCM token for push notifications
+app.post('/api/fcm-token', async (req, res) => {
+  const { phone, fcm_token } = req.body;
+  if (!phone || !fcm_token) return res.status(400).json({ error: 'Phone and fcm_token required' });
+
+  try {
+    const { error } = await supabase.from('users').update({ fcm_token }).eq('phone', phone);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -989,6 +1035,7 @@ app.post('/api/notifications', async (req, res) => {
       return res.status(403).json({ error: 'Invalid admin key' });
     }
 
+    // Store in database
     const row = {
       title,
       body,
@@ -997,6 +1044,56 @@ app.post('/api/notifications', async (req, res) => {
     };
     const { data, error } = await supabase.from('notifications').insert(row).select().single();
     if (error) return res.status(500).json({ error: error.message });
+
+    // Send via FCM if Firebase is configured
+    if (admin) {
+      // Build FCM message
+      const message = {
+        notification: {
+          title: title,
+          body: body
+        },
+        data: {
+          type: type || 'general',
+          click_action: 'OPEN_APP'
+        },
+        android: {
+          priority: 'high',
+          notification: {
+            channel_id: 'datasaver_push',
+            sound: 'default',
+            priority: 'high'
+          }
+        }
+      };
+
+      if (target_phone) {
+        // Find user's FCM token
+        const { data: user } = await supabase.from('users').select('fcm_token').eq('phone', target_phone).single();
+        if (user && user.fcm_token) {
+          message.token = user.fcm_token;
+          await admin.messaging().send(message);
+          console.log('FCM sent to', target_phone);
+        }
+      } else {
+        // Broadcast to all users - send to first 500 tokens
+        const { data: users } = await supabase.from('users').select('fcm_token').not('fcm_token', 'is', null).limit(500);
+        if (users && users.length > 0) {
+          // Send to multiple tokens
+          const tokens = users.map(u => u.fcm_token).filter(t => t);
+          if (tokens.length > 0) {
+            message.tokens = tokens;
+            try {
+              const response = await admin.messaging().sendEachForMulticast(message);
+              console.log('FCM broadcast:', response.successCount, 'sent');
+            } catch (e) {
+              console.log('FCM broadcast error:', e.message);
+            }
+          }
+        }
+      }
+    }
+
     res.json({ success: true, notification: data });
   } catch (e) {
     res.status(500).json({ error: e.message });
