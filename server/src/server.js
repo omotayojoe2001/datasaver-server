@@ -961,14 +961,7 @@ app.get('/admin/api/test-new-route', adminAuth, async (req, res) => {
 // Users
 app.get('/admin/api/all-users', adminAuth, async (req, res) => {
   try {
-    const { page = 1, search = '' } = req.query;
-    const limit = 20;
-    // Get all users
-    let query = supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan');
-    if (search) {
-      query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
-    }
-    const { data, error } = await query.order('created_at', { ascending: false }).range((page - 1) * limit, page * limit - 1);
+    const { data, error } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan').order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
     res.json({ users: data || [], total: data?.length || 0 });
   } catch (e) {
