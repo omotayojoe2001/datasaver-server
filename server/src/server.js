@@ -894,7 +894,7 @@ app.post('/api/tasks/claim', async (req, res) => {
 
 // ADMIN PANEL API (for admin-vercel)
 // Password check middleware
-const ADMIN_PW = process.env.ADMIN_PW || 'datasaver2024';
+const ADMIN_PW = process.env.ADMIN_PW || 'admin123';
 const adminAuth = (req, res, next) => {
   const pw = req.headers['x-admin-password'];
   if (pw !== ADMIN_PW) {
