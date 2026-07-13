@@ -956,10 +956,21 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
 // Users
 app.get('/admin/api/users', adminAuth, async (req, res) => {
   try {
-    const { data, error } = await supabase.from('users').select('*').order('created_at', { ascending: false }).limit(50);
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ users: data || [], total: data?.length || 0 });
+    console.log('=== ADMIN USERS ENDPOINT CALLED ===');
+    console.log('Query params:', req.query);
+    console.log('Supabase URL:', SUPABASE_URL ? 'exists' : 'missing');
+    
+    const result = await supabase.from('users').select('*').order('created_at', { ascending: false }).limit(50);
+    console.log('Result:', JSON.stringify(result).substring(0, 500));
+    
+    if (result.error) {
+      console.log('Error:', result.error);
+      return res.status(500).json({ error: result.error.message });
+    }
+    
+    res.json({ users: result.data || [], total: result.data?.length || 0 });
   } catch (e) {
+    console.log('Exception:', e);
     res.status(500).json({ error: e.message });
   }
 });
