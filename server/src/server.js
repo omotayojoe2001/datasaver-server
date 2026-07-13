@@ -1039,6 +1039,30 @@ app.get('/admin/api/wallet/:phone', adminAuth, async (req, res) => {
   }
 });
 
+// Create new task (admin)
+app.post('/admin/api/task/create', adminAuth, async (req, res) => {
+  try {
+    const { title, description, reward, reward_type, min_plan, daily_limit, proof_required, active } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title,
+      description: description || '',
+      reward: parseInt(reward),
+      reward_type: reward_type || 'airtime',
+      min_plan: min_plan || 'none',
+      daily_limit: parseInt(daily_limit) || 10,
+      proof_required: proof_required !== false,
+      active: active !== false
+    }).select().single();
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, task: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Update user wallet
 app.post('/admin/api/wallet/topup', adminAuth, async (req, res) => {
   try {
