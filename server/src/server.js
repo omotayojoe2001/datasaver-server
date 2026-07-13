@@ -52,7 +52,11 @@ try {
 }
 
 // DataStation API config
+<<<<<<< Updated upstream
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
+=======
+const DATASTATION_URL = process.env.DATASTATION_URL;
+>>>>>>> Stashed changes
 const DATASTATION_TOKEN = process.env.DATASTATION_TOKEN;
 
 // Paystack config
@@ -1353,5 +1357,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Proxy: http://localhost:${PORT}/proxy?url=https://example.com`);
 });
 
+<<<<<<< Updated upstream
 
 
+=======
+>>>>>>> Stashed changes
