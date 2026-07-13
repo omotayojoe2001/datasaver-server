@@ -953,6 +953,11 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
   }
 });
 
+// Debug test route
+app.get('/admin/api/test-new-route', adminAuth, async (req, res) => {
+  res.json({ success: true, message: 'New route works!' });
+});
+
 // Users
 app.get('/admin/api/all-users', adminAuth, async (req, res) => {
   try {
