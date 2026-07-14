@@ -123,7 +123,7 @@ app.post('/api/register', async (req, res) => {
     const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan, referral_code').single();
     if (error) return res.status(500).json({ error: error.message });
 
-    // If referral code provided, apply referral
+    // If referral code provided, apply referral (stored as pending, admin approves rewards)
     let referralMsg = '';
     if (referral_code && data.id) {
       try {
@@ -134,28 +134,15 @@ app.post('/api/register', async (req, res) => {
           const { data: settings } = await supabase.from('app_settings').select('value').eq('key', 'referral_reward_amount').single();
           const rewardAmount = settings ? parseInt(settings.value) : 500;
 
+          // Create referral as PENDING (admin must approve to credit reward)
           await supabase.from('referrals').insert({
             referrer_user_id: referrer.id,
             referred_user_id: data.id,
             reward_amount: rewardAmount,
-            status: 'completed'
+            status: 'pending'
           });
 
-          // Credit referrer's wallet
-          const { data: refBal } = await supabase.from('users').select('wallet_balance').eq('id', referrer.id).single();
-          if (refBal) {
-            const newBal = parseFloat(refBal.wallet_balance || 0) + rewardAmount;
-            await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
-          }
-
-          await supabase.from('wallet_transactions').insert({
-            user_id: referrer.id,
-            type: 'credit',
-            amount: rewardAmount,
-            description: 'Referral reward for inviting ' + phone
-          });
-
-          referralMsg = ' Referral bonus \u20a6' + rewardAmount + ' sent to referrer!';
+          referralMsg = ' Referral recorded! You\'ll earn \u20a6' + rewardAmount + ' when admin approves.';
         }
       } catch (refErr) {
         // Referral failed — don't block registration
@@ -1380,6 +1367,91 @@ app.delete('/admin/api/users/:id', adminAuth, async (req, res) => {
 });
 
 // ============================================
+// ADMIN REFERRALS MANAGEMENT
+// ============================================
+
+// GET /admin/api/referrals - list all referrals with user details
+app.get('/admin/api/referrals', adminAuth, async (req, res) => {
+  try {
+    const { data: referrals, error } = await supabase
+      .from('referrals')
+      .select('*, referrer:users!referrer_user_id(name,phone,email), referred:users!referred_user_id(name,phone,email)')
+      .order('created_at', { ascending: false });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    
+    // Format for admin display
+    const rows = (referrals || []).map(r => ({
+      id: r.id,
+      referrer_name: r.referrer?.name || '-',
+      referrer_phone: r.referrer?.phone || '-',
+      referred_name: r.referred?.name || '-',
+      referred_phone: r.referred?.phone || '-',
+      reward_amount: r.reward_amount,
+      status: r.status,
+      created_at: r.created_at
+    }));
+    
+    res.json({ referrals: rows, total: rows.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /admin/api/referrals/:id/approve - approve referral and credit reward
+app.post('/admin/api/referrals/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get referral details
+    const { data: referral, error: refError } = await supabase
+      .from('referrals')
+      .select('*, referrer:users!referrer_user_id(*), referred:users!referred_user_id(*)')
+      .eq('id', id)
+      .single();
+    
+    if (refError || !referral) return res.status(404).json({ error: 'Referral not found' });
+    if (referral.status === 'completed') return res.status(400).json({ error: 'Referral already approved' });
+    
+    // Credit referrer's wallet
+    const referrer = referral['referrer:users!referrer_user_id'];
+    if (referrer) {
+      const newBal = parseFloat(referrer.wallet_balance || 0) + referral.reward_amount;
+      await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
+      
+      // Log transaction
+      await supabase.from('wallet_transactions').insert({
+        user_id: referrer.id,
+        type: 'credit',
+        amount: referral.reward_amount,
+        description: 'Referral reward for inviting ' + (referral['referrer:users!referred_user_id']?.phone || 'user')
+      });
+    }
+    
+    // Update referral status
+    await supabase.from('referrals').update({ status: 'completed' }).eq('id', id);
+    
+    res.json({ success: true, message: 'Referral approved! ₦' + referral.reward_amount + ' credited to referrer.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /admin/api/referrals/:id/reject - reject referral
+app.post('/admin/api/referrals/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { error } = await supabase.from('referrals').update({ status: 'rejected' }).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    
+    res.json({ success: true, message: 'Referral rejected.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
 // ADMIN DATA PLANS MANAGEMENT
 // ============================================
 
@@ -1707,14 +1779,14 @@ app.get('/api/referrals/stats', async (req, res) => {
     const { data: user } = await supabase.from('users').select('id, referral_code').eq('phone', phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Count successful referrals
+    // Count ALL referrals (pending + completed); earnings only from completed
     const { data: referrals, error } = await supabase.from('referrals')
       .select('*')
       .eq('referrer_user_id', user.id);
 
     if (error) return res.status(500).json({ error: error.message });
 
-    const count = (referrals || []).filter(r => r.status === 'completed').length;
+    const count = (referrals || []).length; // Count ALL referrals
     const totalEarnings = (referrals || []).filter(r => r.status === 'completed')
       .reduce((sum, r) => sum + (r.reward_amount || 0), 0);
 
@@ -1773,38 +1845,15 @@ app.post('/api/referrals/apply', async (req, res) => {
       .single();
     const rewardAmount = settings ? parseInt(settings.value) : 500;
 
-    // Create referral record
+    // Create referral record as PENDING (admin must approve to credit reward)
     await supabase.from('referrals').insert({
       referrer_user_id: referrer.id,
       referred_user_id: newUser.id,
       reward_amount: rewardAmount,
-      status: 'completed'
+      status: 'pending'
     });
 
-    // Credit reward to referrer's wallet
-    await supabase.from('users')
-      .update({ wallet_balance: supabase.rpc('increment_wallet', { user_id: referrer.id, amount: rewardAmount }) })
-      .eq('id', referrer.id);
-
-    // Also try direct update as fallback
-    const { data: referrerData } = await supabase.from('users')
-      .select('wallet_balance')
-      .eq('id', referrer.id)
-      .single();
-    if (referrerData) {
-      const newBal = parseFloat(referrerData.wallet_balance || 0) + rewardAmount;
-      await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
-    }
-
-    // Log wallet credit
-    await supabase.from('wallet_transactions').insert({
-      user_id: referrer.id,
-      type: 'credit',
-      amount: rewardAmount,
-      description: 'Referral reward for inviting ' + phone
-    });
-
-    res.json({ success: true, message: 'Referral applied! \u20a6' + rewardAmount + ' credited to referrer.' });
+    res.json({ success: true, message: 'Referral recorded! Reward will be credited when admin approves.' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
