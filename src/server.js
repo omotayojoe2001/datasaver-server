@@ -361,8 +361,8 @@ app.get('/api/savings/:phone', async (req, res) => {
     // Only return the most recent 30 days for the breakdown list
     const history = (allDays || []).map(h => ({
       date: h.date,
-      saved: h.saved_bytes,
-      blocked: h.blocked_requests,
+      saved_bytes: h.saved_bytes,
+      blocked_requests: h.blocked_requests,
       saved_naira: Math.round(((h.saved_bytes || 0) / (1024 * 1024)) * NAIRA_PER_MB * 100) / 100
     })).slice(0, 30);
     
