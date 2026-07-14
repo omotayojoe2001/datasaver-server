@@ -358,8 +358,8 @@ app.get('/api/savings/:phone', async (req, res) => {
       }
     }
 
-    // Calculate Naira value: ₦5 per MB saved
-    const NAIRA_PER_MB = 5;
+    // Calculate Naira value: ₦1 per MB saved
+    const NAIRA_PER_MB = 1;
     
     // Only return the most recent 30 days for the breakdown list
     const history = (allDays || []).map(h => ({
