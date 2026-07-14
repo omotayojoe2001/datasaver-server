@@ -592,7 +592,17 @@ app.post('/api/subscribe', async (req, res) => {
 
     // Log wallet debit
     await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'debit', amount: cfg.amount, description: plan.charAt(0).toUpperCase() + plan.slice(1) + ' subscription (' + cfg.duration + ')' });
-
+    
+    // Send notification for subscription
+    try {
+      await supabase.from('notifications').insert({
+        title: 'Subscription Activated',
+        body: 'You have subscribed to the ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan for ' + cfg.duration + ' days',
+        type: 'subscription',
+        target_phone: phone
+      });
+    } catch (nfe) { console.log('Notif error:', nfe.message); }
+    
     res.json({ success: true, plan, expires_at: expiresAt, wallet_balance: newBal, message: 'Subscribed to ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -778,6 +788,17 @@ app.post('/api/wallet/topup', async (req, res) => {
     const newBal = parseFloat(user.wallet_balance || 0) + parseFloat(amount);
     await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
     await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount: parseFloat(amount), description: 'Wallet top-up' });
+    
+    // Send notification for wallet top-up
+    try {
+      await supabase.from('notifications').insert({
+        title: 'Wallet Credited',
+        body: '₦' + amount + ' has been added to your wallet',
+        type: 'wallet',
+        target_phone: phone
+      });
+    } catch (nfe) { console.log('Notif error:', nfe.message); }
+    
     res.json({ success: true, balance: newBal });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1007,7 +1028,7 @@ app.get('/api/submissions', adminAuth, async (req, res) => {
 app.post('/api/submissions/:id/approve', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { data: sub, error: subErr } = await supabase.from('task_submissions').select('*, tasks(reward, reward_type)').eq('id', id).single();
+    const { data: sub, error: subErr } = await supabase.from('task_submissions').select('*, users(phone)').eq('id', id).single();
     if (subErr || !sub) return res.status(404).json({ error: 'Submission not found' });
     
     await supabase.from('task_submissions').update({ status: 'approved' }).eq('id', id);
@@ -1024,6 +1045,19 @@ app.post('/api/submissions/:id/approve', adminAuth, async (req, res) => {
         description: 'Task reward: ' + (sub.tasks?.title || 'Task'),
         status: 'completed'
       });
+      
+      // Send notification for task approval
+      try {
+        const userPhone = sub.users?.phone;
+        if (userPhone) {
+          await supabase.from('notifications').insert({
+            title: 'Task Approved!',
+            body: 'Your task "' + (sub.tasks?.title || 'Task') + '" has been approved! ₦' + reward + ' has been added to your wallet.',
+            type: 'task',
+            target_phone: userPhone
+          });
+        }
+      } catch (nfe) { console.log('Notif error:', nfe.message); }
     }
     res.json({ success: true });
   } catch (e) {
@@ -1512,7 +1546,7 @@ app.get('/api/notifications', async (req, res) => {
     let query = supabase.from('notifications')
       .select('*')
       .or(`target_phone.eq.${phone},target_phone.is.null`)
-      .order('id', { ascending: true });
+      .order('created_at', { ascending: false }); // Newest first
 
     if (since_id && since_id !== '0') {
       query = query.gt('id', parseInt(since_id));
