@@ -101,7 +101,7 @@ app.get('/api/subscription-plans', async (req, res) => {
 // POST /api/register  { email, pin, name, phone, referral_code }
 app.post('/api/register', async (req, res) => {
   const { phone, pin, name, email, referral_code } = req.body;
-  if (!email || !pin) return res.status(400).json({ error: 'Email and PIN required' });
+  if (!email || !pin || !phone) return res.status(400).json({ error: 'Phone number, email and PIN are required' });
 
   try {
     // Check if email already exists
@@ -119,7 +119,7 @@ app.post('/api/register', async (req, res) => {
     const shortDigits = digits.length > 6 ? digits.slice(-6) : digits;
     const userReferralCode = 'DS' + shortDigits + Math.random().toString(36).substring(2, 5).toUpperCase();
 
-    const row = { email, pin: pin || '0000', name: name || '', phone: phone || '', referral_code: userReferralCode };
+    const row = { email, pin: pin || '0000', name: name || '', phone: phone || null, referral_code: userReferralCode };
     const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan, referral_code').single();
     if (error) return res.status(500).json({ error: error.message });
 
