@@ -293,37 +293,45 @@ app.post('/api/savings/sync', async (req, res) => {
 // GET /api/savings/:phone  — get savings history
 app.get('/api/savings/:phone', async (req, res) => {
   try {
-    const { data: user } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests, ad_bytes_saved, bg_bytes_saved').eq('phone', req.params.phone).single();
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Get daily history (last 30 days)
-    const { data: history } = await supabase.from('savings_history')
-      .select('*').eq('user_id', user.id)
-      .order('date', { ascending: false }).limit(30);
+    // Fetch ALL daily rows so all-time totals = sum of the daily breakdown
+    const { data: allDays } = await supabase.from('savings_history')
+      .select('date, saved_bytes, blocked_requests')
+      .eq('user_id', user.id)
+      .order('date', { ascending: false });
 
-    // Calculate today/week/month totals
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
+    let totalSaved = 0, totalBlocked = 0;
     let todaySaved = 0, weekSaved = 0, monthSaved = 0;
     let todayBlocked = 0, weekBlocked = 0, monthBlocked = 0;
-    if (history) {
-      for (const h of history) {
-        if (h.date === todayStr) { todaySaved = h.saved_bytes; todayBlocked = h.blocked_requests; }
-        if (h.date >= weekAgo) { weekSaved += h.saved_bytes; weekBlocked += h.blocked_requests; }
-        if (h.date >= monthAgo) { monthSaved += h.saved_bytes; monthBlocked += h.blocked_requests; }
+    if (allDays) {
+      for (const h of allDays) {
+        const s = h.saved_bytes || 0;
+        const b = h.blocked_requests || 0;
+        // All time = sum of every day
+        totalSaved += s; totalBlocked += b;
+        if (h.date === todayStr) { todaySaved += s; todayBlocked += b; }
+        if (h.date >= weekAgo) { weekSaved += s; weekBlocked += b; }
+        if (h.date >= monthAgo) { monthSaved += s; monthBlocked += b; }
       }
     }
 
+    // Only return the most recent 30 days for the breakdown list
+    const history = (allDays || []).slice(0, 30);
+
     res.json({
-      total_saved: user.total_saved_bytes || 0,
-      total_blocked: user.total_blocked_requests || 0,
+      total_saved: totalSaved,
+      total_blocked: totalBlocked,
       today: { saved: todaySaved, blocked: todayBlocked },
       week: { saved: weekSaved, blocked: weekBlocked },
       month: { saved: monthSaved, blocked: monthBlocked },
-      history: history || []
+      history
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -559,17 +567,36 @@ app.get('/api/transactions/:phone', async (req, res) => {
 // SUBSCRIPTIONS
 // ============================================
 
-const PLAN_CONFIG = {
-  premium:      { amount: 500,   duration: '90 days (promo)', ms: 90 * 24 * 60 * 60 * 1000, devices: 1, promo: true },
-  professional: { amount: 1500,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000, devices: 2 },
-  enterprise:   { amount: 5000,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000, devices: 5 }
-};
+// Device limits per plan (not admin-configurable)
+const PLAN_DEVICES = { premium: 1, professional: 2, enterprise: 5 };
+
+// Fetch subscription pricing from admin settings (app_settings), with fallback to defaults
+async function getSubscriptionPricing() {
+  const defaults = {
+    premium:      { price: 500,  duration: 7,  devices: 1 },
+    professional: { price: 1500, duration: 30, devices: 2 },
+    enterprise:   { price: 5000, duration: 30, devices: 5 }
+  };
+  try {
+    const { data: settings } = await supabase.from('app_settings').select('key, value');
+    const s = {};
+    if (settings) for (const row of settings) s[row.key] = row.value;
+    return {
+      premium:      { price: parseInt(s.premium_price) || defaults.premium.price, duration: parseInt(s.premium_duration) || defaults.premium.duration, devices: 1 },
+      professional: { price: parseInt(s.professional_price) || defaults.professional.price, duration: parseInt(s.professional_duration) || defaults.professional.duration, devices: 2 },
+      enterprise:   { price: parseInt(s.enterprise_price) || defaults.enterprise.price, duration: parseInt(s.enterprise_duration) || defaults.enterprise.duration, devices: 5 }
+    };
+  } catch (e) {
+    return defaults;
+  }
+}
 
 // POST /api/subscribe  { phone, plan }
 app.post('/api/subscribe', async (req, res) => {
   const { phone, plan } = req.body;
   if (!phone || !plan) return res.status(400).json({ error: 'phone and plan required' });
-  const cfg = PLAN_CONFIG[plan];
+  const pricing = await getSubscriptionPricing();
+  const cfg = pricing[plan];
   if (!cfg) return res.status(400).json({ error: 'Invalid plan. Choose premium, professional, or enterprise' });
 
   try {
@@ -577,27 +604,29 @@ app.post('/api/subscribe', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const bal = parseFloat(user.wallet_balance || 0);
-    if (bal < cfg.amount) {
-      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + bal.toFixed(0) + ' but need \u20a6' + cfg.amount });
+    if (bal < cfg.price) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + bal.toFixed(0) + ' but need \u20a6' + cfg.price });
     }
 
-    const expiresAt = new Date(Date.now() + cfg.ms).toISOString();
-    const newBal = bal - cfg.amount;
+    const durationMs = cfg.duration * 24 * 60 * 60 * 1000;
+    const durationLabel = cfg.duration + ' days';
+    const expiresAt = new Date(Date.now() + durationMs).toISOString();
+    const newBal = bal - cfg.price;
 
     // Update user
     await supabase.from('users').update({ subscription_plan: plan, subscription_expires_at: expiresAt, wallet_balance: newBal }).eq('id', user.id);
 
     // Log subscription
-    await supabase.from('subscriptions').insert({ user_id: user.id, plan, amount: cfg.amount, duration: cfg.duration, expires_at: expiresAt });
+    await supabase.from('subscriptions').insert({ user_id: user.id, plan, amount: cfg.price, duration: durationLabel, expires_at: expiresAt });
 
     // Log wallet debit
-    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'debit', amount: cfg.amount, description: plan.charAt(0).toUpperCase() + plan.slice(1) + ' subscription (' + cfg.duration + ')' });
+    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'debit', amount: cfg.price, description: plan.charAt(0).toUpperCase() + plan.slice(1) + ' subscription (' + durationLabel + ')' });
     
     // Send notification for subscription
     try {
       await supabase.from('notifications').insert({
         title: 'Subscription Activated',
-        body: 'You have subscribed to the ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan for ' + cfg.duration + ' days',
+        body: 'You have subscribed to the ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan for ' + durationLabel,
         type: 'subscription',
         target_phone: phone
       });
@@ -676,8 +705,8 @@ app.post('/api/wallet/initialize', async (req, res) => {
 // Helper: credit wallet and update pending transaction to success
 async function creditWallet(ref, amount, phone, email) {
   let user = null;
-  if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
-  if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', email).single(); user = u; }
+  if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance, phone').eq('phone', phone).single(); user = u; }
+  if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance, phone').eq('email', email).single(); user = u; }
   if (!user) return null;
 
   // Check if already credited (prevent double credit)
@@ -693,6 +722,19 @@ async function creditWallet(ref, amount, phone, email) {
 
   const newBal = parseFloat(user.wallet_balance || 0) + amount;
   await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+
+  // Send notification for successful deposit (only on first credit)
+  try {
+    if (user.phone) {
+      await supabase.from('notifications').insert({
+        title: 'Wallet Credited',
+        body: '\u20a6' + amount + ' has been added to your wallet',
+        type: 'wallet',
+        target_phone: user.phone
+      });
+    }
+  } catch (nfe) { console.log('Notif error:', nfe.message); }
+
   return { ...user, wallet_balance: newBal };
 }
 
@@ -1662,7 +1704,7 @@ app.get('/api/referrals/stats', async (req, res) => {
     const { phone } = req.query;
     if (!phone) return res.status(400).json({ error: 'Phone required' });
 
-    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+    const { data: user } = await supabase.from('users').select('id, referral_code').eq('phone', phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     // Count successful referrals
@@ -1686,7 +1728,8 @@ app.get('/api/referrals/stats', async (req, res) => {
     res.json({
       referral_count: count,
       total_earnings: totalEarnings,
-      reward_per_referral: rewardPerRef
+      reward_per_referral: rewardPerRef,
+      referral_code: user.referral_code || ''
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
