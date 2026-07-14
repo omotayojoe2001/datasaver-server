@@ -224,84 +224,48 @@ app.post('/api/user/update', async (req, res) => {
 });
 
 // POST /api/savings/sync  { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes }
-// Uses MAX - keeps highest value received (handle duplicate syncs)
+// Stores daily savings in savings_history table only
 app.post('/api/savings/sync', async (req, res) => {
   const { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes } = req.body;
-  console.log('SAVINGS SYNC RECEIVED:', { phone, saved_bytes, blocked_requests });
+  console.log('SAVINGS SYNC:', { phone, saved_bytes, blocked_requests });
   if (!phone) return res.status(400).json({ error: 'phone required' });
   try {
-    // Get current user data first
-    const { data: user, error: userErr } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests, ad_bytes_saved, bg_bytes_saved').eq('phone', phone).single();
+    // Get user ID
+    const { data: user, error: userErr } = await supabase.from('users').select('id').eq('phone', phone).single();
     if (userErr || !user) return res.status(404).json({ error: 'User not found' });
 
-    // Use MAX - keep highest value (handles duplicate syncs during session)
-    // Ensure we handle null/undefined properly
-    const oldSaved = user.total_saved_bytes || 0;
-    const newSaved = saved_bytes || 0;
-    const oldBlocked = user.total_blocked_requests || 0;
-    const newBlocked = blocked_requests || 0;
-    
-    // Always take the higher value - cumulative should only increase
-    const newTotalSaved = oldSaved > newSaved ? oldSaved : newSaved;
-    const newTotalBlocked = oldBlocked > newBlocked ? oldBlocked : newBlocked;
-    const newAdBytes = Math.max(user.ad_bytes_saved || 0, ad_bytes || 0);
-    const newBgBytes = Math.max(user.bg_bytes_saved || 0, bg_bytes || 0);
-
-    // Update user with max values - ensure it's always updated
-    const { error: updateError } = await supabase.from('users').update({
-      total_saved_bytes: newTotalSaved,
-      total_blocked_requests: newTotalBlocked,
-      ad_bytes_saved: newAdBytes,
-      bg_bytes_saved: newBgBytes,
-      last_savings_sync: new Date().toISOString()
-    }).eq('id', user.id);
-    
-    if (updateError) {
-      console.error('Failed to update user savings:', updateError);
-    }
-
-    // Save daily snapshot - store DELTA (new savings since last sync)
+    // Save daily snapshot
     const today = new Date().toISOString().split('T')[0];
     const incomingSaved = saved_bytes || 0;
     const incomingBlocked = blocked_requests || 0;
     
-    // Get today's row to calculate delta
+    // Get today's row
     const { data: existing } = await supabase.from('savings_history')
       .select('id, saved_bytes, blocked_requests').eq('user_id', user.id).eq('date', today).single();
     
-    // Calculate delta: incoming value MINUS what we already have for today
-    // This ensures we only add NEW savings, not duplicates
+    // Calculate delta: only add NEW savings (incoming - existing)
     const existingSaved = existing ? (existing.saved_bytes || 0) : 0;
     const existingBlocked = existing ? (existing.blocked_requests || 0) : 0;
     
-    // Only add if incoming is greater than what we already have
     let savedDelta = 0;
     let blockedDelta = 0;
-    if (incomingSaved > existingSaved) {
-      savedDelta = incomingSaved - existingSaved;
-    }
-    if (incomingBlocked > existingBlocked) {
-      blockedDelta = incomingBlocked - existingBlocked;
-    }
+    if (incomingSaved > existingSaved) savedDelta = incomingSaved - existingSaved;
+    if (incomingBlocked > existingBlocked) blockedDelta = incomingBlocked - existingBlocked;
     
     if (existing) {
-      // Same day - ADD delta to existing
+      // Same day - add delta
       const newSaved = (existing.saved_bytes || 0) + savedDelta;
       const newBlocked = (existing.blocked_requests || 0) + blockedDelta;
       await supabase.from('savings_history').update({
         saved_bytes: newSaved,
-        blocked_requests: newBlocked,
-        ad_bytes: ad_bytes || 0,
-        bg_bytes: bg_bytes || 0
+        blocked_requests: newBlocked
       }).eq('id', existing.id);
     } else {
-      // New day - insert first value
+      // New day - insert
       await supabase.from('savings_history').insert({
         user_id: user.id, date: today,
         saved_bytes: incomingSaved,
-        blocked_requests: incomingBlocked,
-        ad_bytes: ad_bytes || 0,
-        bg_bytes: bg_bytes || 0
+        blocked_requests: incomingBlocked
       });
     }
     res.json({ success: true });
@@ -313,11 +277,11 @@ app.post('/api/savings/sync', async (req, res) => {
 // GET /api/savings/:phone  — get savings history
 app.get('/api/savings/:phone', async (req, res) => {
   try {
-    // Get user with cumulative totals from users table
-    const { data: user } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests').eq('phone', req.params.phone).single();
+    // Get user ID only
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Fetch ALL daily rows (now storing delta, not cumulative)
+    // Fetch ALL daily rows
     const { data: allDays } = await supabase.from('savings_history')
       .select('date, saved_bytes, blocked_requests')
       .eq('user_id', user.id)
@@ -328,7 +292,6 @@ app.get('/api/savings/:phone', async (req, res) => {
     const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    // ALWAYS use history as the source for all calculations
     // Sum all history for all-time total
     let totalSaved = 0;
     let totalBlocked = 0;
@@ -339,13 +302,7 @@ app.get('/api/savings/:phone', async (req, res) => {
       }
     }
     
-    // Use users table only as fallback if history is empty
-    if (totalSaved === 0) {
-      totalSaved = user.total_saved_bytes || 0;
-      totalBlocked = user.total_blocked_requests || 0;
-    }
-    
-    // Calculate week/month from history (sum of daily deltas)
+    // Calculate week/month/today from history
     let weekSaved = 0, monthSaved = 0;
     let weekBlocked = 0, monthBlocked = 0;
     let todaySaved = 0, todayBlocked = 0;
