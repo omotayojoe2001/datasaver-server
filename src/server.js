@@ -234,19 +234,30 @@ app.post('/api/savings/sync', async (req, res) => {
     if (userErr || !user) return res.status(404).json({ error: 'User not found' });
 
     // Use MAX - keep highest value (handles duplicate syncs during session)
-    const newTotalSaved = Math.max(user.total_saved_bytes || 0, saved_bytes || 0);
-    const newTotalBlocked = Math.max(user.total_blocked_requests || 0, blocked_requests || 0);
+    // Ensure we handle null/undefined properly
+    const oldSaved = user.total_saved_bytes || 0;
+    const newSaved = saved_bytes || 0;
+    const oldBlocked = user.total_blocked_requests || 0;
+    const newBlocked = blocked_requests || 0;
+    
+    // Always take the higher value - cumulative should only increase
+    const newTotalSaved = oldSaved > newSaved ? oldSaved : newSaved;
+    const newTotalBlocked = oldBlocked > newBlocked ? oldBlocked : newBlocked;
     const newAdBytes = Math.max(user.ad_bytes_saved || 0, ad_bytes || 0);
     const newBgBytes = Math.max(user.bg_bytes_saved || 0, bg_bytes || 0);
 
-    // Update user with max values
-    await supabase.from('users').update({
+    // Update user with max values - ensure it's always updated
+    const { error: updateError } = await supabase.from('users').update({
       total_saved_bytes: newTotalSaved,
       total_blocked_requests: newTotalBlocked,
       ad_bytes_saved: newAdBytes,
       bg_bytes_saved: newBgBytes,
       last_savings_sync: new Date().toISOString()
     }).eq('id', user.id);
+    
+    if (updateError) {
+      console.error('Failed to update user savings:', updateError);
+    }
 
     // Save daily snapshot - store DELTA (today's savings only, not cumulative)
     // We calculate delta = current - previous cumulative
@@ -324,8 +335,17 @@ app.get('/api/savings/:phone', async (req, res) => {
     const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     // Use cumulative from users table as all-time (authoritative)
-    const totalSaved = user.total_saved_bytes || 0;
-    const totalBlocked = user.total_blocked_requests || 0;
+    // If users table has 0 or null, fall back to summing all history
+    let totalSaved = user.total_saved_bytes || 0;
+    let totalBlocked = user.total_blocked_requests || 0;
+    
+    // Fallback: if users table shows 0 but history has data, sum from history
+    if (totalSaved === 0 && allDays && allDays.length > 0) {
+      for (const h of allDays) {
+        totalSaved += h.saved_bytes || 0;
+        totalBlocked += h.blocked_requests || 0;
+      }
+    }
     
     // Calculate week/month from history (sum of daily deltas)
     let weekSaved = 0, monthSaved = 0;
