@@ -272,19 +272,16 @@ app.post('/api/savings/sync', async (req, res) => {
     if (currentCumulative > previousCumulative) {
       // New cumulative is higher - calculate delta
       savedDelta = currentCumulative - previousCumulative;
-    } else {
-      // Same or lower - might be same-day sync, use current as delta
-      savedDelta = currentCumulative;
     }
+    // If currentCumulative <= previousCumulative, delta is 0 (no new savings since last sync)
     
     // Same logic for blocked requests
     const previousBlocked = user.total_blocked_requests || 0;
     const currentBlocked = blocked_requests || 0;
     if (currentBlocked > previousBlocked) {
       blockedDelta = currentBlocked - previousBlocked;
-    } else {
-      blockedDelta = currentBlocked;
     }
+    // If currentBlocked <= previousBlocked, delta is 0
     
     // Get or create today's row
     const { data: existing } = await supabase.from('savings_history')
@@ -362,14 +359,27 @@ app.get('/api/savings/:phone', async (req, res) => {
     }
 
     // Only return the most recent 30 days for the breakdown list
-    const history = (allDays || []).slice(0, 30);
+    const history = (allDays || []).map(h => ({
+      date: h.date,
+      saved: h.saved_bytes,
+      blocked: h.blocked_requests,
+      saved_naira: Math.round(((h.saved_bytes || 0) / (1024 * 1024)) * NAIRA_PER_MB * 100) / 100
+    })).slice(0, 30);
+    
+    // Calculate Naira value: ₦5 per MB saved
+    const NAIRA_PER_MB = 5;
+    const totalSavedNaira = (totalSaved / (1024 * 1024)) * NAIRA_PER_MB;
+    const todaySavedNaira = (todaySaved / (1024 * 1024)) * NAIRA_PER_MB;
+    const weekSavedNaira = (weekSaved / (1024 * 1024)) * NAIRA_PER_MB;
+    const monthSavedNaira = (monthSaved / (1024 * 1024)) * NAIRA_PER_MB;
 
     res.json({
       total_saved: totalSaved,
       total_blocked: totalBlocked,
-      today: { saved: todaySaved, blocked: todayBlocked },
-      week: { saved: weekSaved, blocked: weekBlocked },
-      month: { saved: monthSaved, blocked: monthBlocked },
+      total_saved_naira: Math.round(totalSavedNaira * 100) / 100,
+      today: { saved: todaySaved, blocked: todayBlocked, saved_naira: Math.round(todaySavedNaira * 100) / 100 },
+      week: { saved: weekSaved, blocked: weekBlocked, saved_naira: Math.round(weekSavedNaira * 100) / 100 },
+      month: { saved: monthSaved, blocked: monthBlocked, saved_naira: Math.round(monthSavedNaira * 100) / 100 },
       history
     });
   } catch (e) {
