@@ -358,6 +358,9 @@ app.get('/api/savings/:phone', async (req, res) => {
       }
     }
 
+    // Calculate Naira value: ₦5 per MB saved
+    const NAIRA_PER_MB = 5;
+    
     // Only return the most recent 30 days for the breakdown list
     const history = (allDays || []).map(h => ({
       date: h.date,
@@ -365,9 +368,6 @@ app.get('/api/savings/:phone', async (req, res) => {
       blocked_requests: h.blocked_requests,
       saved_naira: Math.round(((h.saved_bytes || 0) / (1024 * 1024)) * NAIRA_PER_MB * 100) / 100
     })).slice(0, 30);
-    
-    // Calculate Naira value: ₦5 per MB saved
-    const NAIRA_PER_MB = 5;
     const totalSavedNaira = (totalSaved / (1024 * 1024)) * NAIRA_PER_MB;
     const todaySavedNaira = (todaySaved / (1024 * 1024)) * NAIRA_PER_MB;
     const weekSavedNaira = (weekSaved / (1024 * 1024)) * NAIRA_PER_MB;
