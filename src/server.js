@@ -60,6 +60,40 @@ app.get('/api/plans', async (req, res) => {
   }
 });
 
+// GET /api/subscription-plans - public endpoint for mobile app to get subscription pricing
+app.get('/api/subscription-plans', async (req, res) => {
+  try {
+    const { data: settings, error } = await supabase.from('app_settings').select('key, value');
+    if (error) return res.status(500).json({ error: error.message });
+    
+    // Convert array to object
+    const settingsObj = {};
+    if (settings) {
+      for (const s of settings) {
+        settingsObj[s.key] = s.value;
+      }
+    }
+    
+    // Return subscription plans with prices from database
+    res.json({
+      premium: {
+        price: parseInt(settingsObj.premium_price) || 500,
+        duration: parseInt(settingsObj.premium_duration) || 7
+      },
+      professional: {
+        price: parseInt(settingsObj.professional_price) || 1500,
+        duration: parseInt(settingsObj.professional_duration) || 30
+      },
+      enterprise: {
+        price: parseInt(settingsObj.enterprise_price) || 5000,
+        duration: parseInt(settingsObj.enterprise_duration) || 30
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================
 // USER API
 // ============================================
@@ -1570,6 +1604,20 @@ app.post('/api/notifications', async (req, res) => {
   }
 });
 
+// ADMIN: Get all notifications
+app.get('/admin/api/notifications', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('notifications')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================
 // REFERRAL SYSTEM
 // ============================================
@@ -1882,7 +1930,7 @@ app.get('/admin/api/settings', adminAuth, async (req, res) => {
 
 app.post('/admin/api/settings', adminAuth, async (req, res) => {
   try {
-    const { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement, new_password } = req.body;
+    const { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, admin_password } = req.body;
     
     // Save each setting to app_settings table
     const settings = {
@@ -1891,12 +1939,18 @@ app.post('/admin/api/settings', adminAuth, async (req, res) => {
       professional_price: professional_price || '1500',
       professional_duration: professional_duration || '30',
       enterprise_price: enterprise_price || '5000',
-      enterprise_duration: enterprise_duration || '30',
-      announcement: announcement || ''
+      enterprise_duration: enterprise_duration || '30'
     };
     
     for (const [key, value] of Object.entries(settings)) {
       await supabase.from('app_settings').upsert({ key, value }, { onConflict: 'key' });
+    }
+    
+    // Handle admin password change
+    if (admin_password) {
+      console.log('Admin password change requested');
+      // Note: Password change would require updating the ADMIN_PW env var on Render
+      // For now, just log it. In production, you'd store in app_settings and check there
     }
     
     console.log('Settings saved:', settings);
