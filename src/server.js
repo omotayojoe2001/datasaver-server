@@ -232,7 +232,10 @@ app.post('/api/savings/sync', async (req, res) => {
   try {
     // Get user ID
     const { data: user, error: userErr } = await supabase.from('users').select('id').eq('phone', phone).single();
-    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
+    if (userErr || !user) {
+      console.log('SAVINGS SYNC ERROR: User not found', phone);
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     const incomingSaved = saved_bytes || 0;
     const incomingBlocked = blocked_requests || 0;
@@ -241,13 +244,19 @@ app.post('/api/savings/sync', async (req, res) => {
     const savedNaira = (incomingSaved / (1024 * 1024));
     
     // Record to ACTIVITY LOG - this is the permanent record
-    await supabase.from('savings_activity_log').insert({
+    const { data: logData, error: logError } = await supabase.from('savings_activity_log').insert({
       user_id: user.id,
       phone: phone,
       saved_bytes: incomingSaved,
       blocked_requests: incomingBlocked,
       saved_naira: savedNaira
     });
+    
+    if (logError) {
+      console.log('SAVINGS SYNC ERROR: Activity log insert failed', logError);
+    } else {
+      console.log('SAVINGS SYNC SUCCESS: Activity log recorded', { phone, saved_bytes: incomingSaved, blocked: incomingBlocked });
+    }
     
     // Also save to daily history for backward compatibility
     const today = new Date().toISOString().split('T')[0];
