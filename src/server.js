@@ -224,7 +224,7 @@ app.post('/api/user/update', async (req, res) => {
 });
 
 // POST /api/savings/sync  { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes }
-// Stores daily savings in savings_history table only
+// Records each sync to activity log for permanent record
 app.post('/api/savings/sync', async (req, res) => {
   const { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes } = req.body;
   console.log('SAVINGS SYNC:', { phone, saved_bytes, blocked_requests });
@@ -234,16 +234,26 @@ app.post('/api/savings/sync', async (req, res) => {
     const { data: user, error: userErr } = await supabase.from('users').select('id').eq('phone', phone).single();
     if (userErr || !user) return res.status(404).json({ error: 'User not found' });
 
-    // Save daily snapshot
-    const today = new Date().toISOString().split('T')[0];
     const incomingSaved = saved_bytes || 0;
     const incomingBlocked = blocked_requests || 0;
     
-    // Get today's row
+    // Calculate Naira: ₦1 per MB
+    const savedNaira = (incomingSaved / (1024 * 1024));
+    
+    // Record to ACTIVITY LOG - this is the permanent record
+    await supabase.from('savings_activity_log').insert({
+      user_id: user.id,
+      phone: phone,
+      saved_bytes: incomingSaved,
+      blocked_requests: incomingBlocked,
+      saved_naira: savedNaira
+    });
+    
+    // Also save to daily history for backward compatibility
+    const today = new Date().toISOString().split('T')[0];
     const { data: existing } = await supabase.from('savings_history')
       .select('id, saved_bytes, blocked_requests').eq('user_id', user.id).eq('date', today).single();
     
-    // Calculate delta: only add NEW savings (incoming - existing)
     const existingSaved = existing ? (existing.saved_bytes || 0) : 0;
     const existingBlocked = existing ? (existing.blocked_requests || 0) : 0;
     
@@ -253,7 +263,6 @@ app.post('/api/savings/sync', async (req, res) => {
     if (incomingBlocked > existingBlocked) blockedDelta = incomingBlocked - existingBlocked;
     
     if (existing) {
-      // Same day - add delta
       const newSaved = (existing.saved_bytes || 0) + savedDelta;
       const newBlocked = (existing.blocked_requests || 0) + blockedDelta;
       await supabase.from('savings_history').update({
@@ -261,7 +270,6 @@ app.post('/api/savings/sync', async (req, res) => {
         blocked_requests: newBlocked
       }).eq('id', existing.id);
     } else {
-      // New day - insert
       await supabase.from('savings_history').insert({
         user_id: user.id, date: today,
         saved_bytes: incomingSaved,
@@ -340,6 +348,25 @@ app.get('/api/savings/:phone', async (req, res) => {
       month: { saved: monthSaved, blocked: monthBlocked, saved_naira: Math.round(monthSavedNaira * 100) / 100 },
       history
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/savings/activity/:phone  — get activity log
+app.get('/api/savings/activity/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Fetch activity log - most recent first
+    const { data: logs } = await supabase.from('savings_activity_log')
+      .select('id, saved_bytes, blocked_requests, saved_naira, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    res.json({ activity: logs || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
