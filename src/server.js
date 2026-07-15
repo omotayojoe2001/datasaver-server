@@ -343,7 +343,8 @@ app.get('/api/savings/:phone', async (req, res) => {
     const history = Object.keys(dailyMap).sort((a, b) => b.localeCompare(a)).slice(0, 30).map(date => ({
       date: date,
       saved_bytes: dailyMap[date].saved_bytes,
-      blocked_requests: dailyMap[date].blocked_requests
+      blocked_requests: dailyMap[date].blocked_requests,
+      saved_naira: Math.round((dailyMap[date].saved_bytes / (1024 * 1024)) * 100) / 100
     }));
 
     const totalSavedNaira = (totalSaved / (1024 * 1024));
