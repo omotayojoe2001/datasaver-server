@@ -282,62 +282,65 @@ app.post('/api/savings/sync', async (req, res) => {
   }
 });
 
-// GET /api/savings/:phone  — get savings history
+// GET /api/savings/:phone  — get savings history FROM ACTIVITY LOG
 app.get('/api/savings/:phone', async (req, res) => {
   try {
-    // Get user ID only
+    // Get user ID
     const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Fetch ALL daily rows
-    const { data: allDays } = await supabase.from('savings_history')
-      .select('date, saved_bytes, blocked_requests')
+    // Fetch ALL activity log entries
+    const { data: logs } = await supabase.from('savings_activity_log')
+      .select('saved_bytes, blocked_requests, created_at')
       .eq('user_id', user.id)
-      .order('date', { ascending: false });
+      .order('created_at', { ascending: false });
 
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    // Sum all history for all-time total
-    let totalSaved = 0;
-    let totalBlocked = 0;
-    if (allDays && allDays.length > 0) {
-      for (const h of allDays) {
-        totalSaved += h.saved_bytes || 0;
-        totalBlocked += h.blocked_requests || 0;
-      }
-    }
-    
-    // Calculate week/month/today from history
-    let weekSaved = 0, monthSaved = 0;
-    let weekBlocked = 0, monthBlocked = 0;
+    // Calculate totals from activity log
+    let totalSaved = 0, totalBlocked = 0;
+    let weekSaved = 0, weekBlocked = 0;
+    let monthSaved = 0, monthBlocked = 0;
     let todaySaved = 0, todayBlocked = 0;
-    if (allDays) {
-      for (const h of allDays) {
-        const s = h.saved_bytes || 0;
-        const b = h.blocked_requests || 0;
-        if (h.date === todayStr) { todaySaved += s; todayBlocked += b; }
-        if (h.date >= weekAgo) { weekSaved += s; weekBlocked += b; }
-        if (h.date >= monthAgo) { monthSaved += s; monthBlocked += b; }
+    
+    // Group by date for daily breakdown
+    const dailyMap = {};
+    
+    if (logs) {
+      for (const log of logs) {
+        const saved = log.saved_bytes || 0;
+        const blocked = log.blocked_requests || 0;
+        const time = log.created_at || "";
+        const date = time.split('T')[0];
+        
+        totalSaved += saved;
+        totalBlocked += blocked;
+        
+        if (date >= todayStr) { todaySaved += saved; todayBlocked += blocked; }
+        if (date >= weekAgo) { weekSaved += saved; weekBlocked += blocked; }
+        if (date >= monthAgo) { monthSaved += saved; monthBlocked += blocked; }
+        
+        // Group by date
+        if (!dailyMap[date]) dailyMap[date] = { saved_bytes: 0, blocked_requests: 0 };
+        dailyMap[date].saved_bytes += saved;
+        dailyMap[date].blocked_requests += blocked;
       }
     }
-
-    // Calculate Naira value: ₦1 per MB saved
-    const NAIRA_PER_MB = 1;
     
-    // Only return the most recent 30 days for the breakdown list
-    const history = (allDays || []).map(h => ({
-      date: h.date,
-      saved_bytes: h.saved_bytes,
-      blocked_requests: h.blocked_requests,
-      saved_naira: Math.round(((h.saved_bytes || 0) / (1024 * 1024)) * NAIRA_PER_MB * 100) / 100
-    })).slice(0, 30);
-    const totalSavedNaira = (totalSaved / (1024 * 1024)) * NAIRA_PER_MB;
-    const todaySavedNaira = (todaySaved / (1024 * 1024)) * NAIRA_PER_MB;
-    const weekSavedNaira = (weekSaved / (1024 * 1024)) * NAIRA_PER_MB;
-    const monthSavedNaira = (monthSaved / (1024 * 1024)) * NAIRA_PER_MB;
+    // Convert to array sorted by date descending
+    const history = Object.keys(dailyMap).sort((a, b) => b.localeCompare(a)).slice(0, 30).map(date => ({
+      date: date,
+      saved_bytes: dailyMap[date].saved_bytes,
+      blocked_requests: dailyMap[date].blocked_requests
+    }));
+
+    const totalSavedNaira = (totalSaved / (1024 * 1024));
+    const todaySavedNaira = (todaySaved / (1024 * 1024));
+    const weekSavedNaira = (weekSaved / (1024 * 1024));
+    const monthSavedNaira = (monthSaved / (1024 * 1024));
 
     res.json({
       total_saved: totalSaved,
