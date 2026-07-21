@@ -125,31 +125,51 @@ app.post('/api/register', async (req, res) => {
 
     // If referral code provided, apply referral (stored as pending, admin approves rewards)
     let referralMsg = '';
+    let referralApplied = false;
     if (referral_code && data.id) {
       try {
-        // Find referrer
-        const { data: referrer } = await supabase.from('users').select('id, phone').eq('referral_code', referral_code).single();
-        if (referrer && referrer.phone !== phone) {
-          // Get reward amount
+        const normalizedCode = String(referral_code).trim().toUpperCase();
+        const { data: referrer, error: refLookupErr } = await supabase
+          .from('users')
+          .select('id, phone, referral_code')
+          .ilike('referral_code', normalizedCode)
+          .maybeSingle();
+
+        if (refLookupErr) {
+          console.log('Referral lookup error:', refLookupErr.message);
+        } else if (!referrer) {
+          console.log('Referral code not found:', normalizedCode);
+          referralMsg = ' Note: referral code was not recognized.';
+        } else if (referrer.phone === phone) {
+          console.log('Self-referral blocked for phone:', phone);
+          referralMsg = ' Note: you cannot use your own referral code.';
+        } else {
           const { data: settings } = await supabase.from('app_settings').select('value').eq('key', 'referral_reward_amount').single();
           const rewardAmount = settings ? parseInt(settings.value) : 500;
 
-          // Create referral as PENDING (admin must approve to credit reward)
-          await supabase.from('referrals').insert({
+          const { error: insertErr } = await supabase.from('referrals').insert({
             referrer_user_id: referrer.id,
             referred_user_id: data.id,
             reward_amount: rewardAmount,
             status: 'pending'
           });
 
-          referralMsg = ' Referral recorded! You\'ll earn \u20a6' + rewardAmount + ' when admin approves.';
+          if (insertErr) {
+            console.log('Referral insert error:', insertErr.message);
+            referralMsg = ' Note: referral could not be recorded.';
+          } else {
+            referralApplied = true;
+            referralMsg = ' Referral recorded for ' + (referrer.phone || 'your referrer') + '. Reward pending admin approval.';
+            console.log('Referral created: referrer', referrer.id, 'referred', data.id);
+          }
         }
       } catch (refErr) {
-        // Referral failed — don't block registration
+        console.log('Referral apply failed:', refErr.message);
+        referralMsg = ' Note: referral could not be recorded.';
       }
     }
 
-    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'none', referral_code: data.referral_code, message: 'Account created' + referralMsg });
+    res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'none', referral_code: data.referral_code, referral_applied: referralApplied, message: 'Account created' + referralMsg });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1875,11 +1895,13 @@ app.post('/api/referrals/apply', async (req, res) => {
     const { phone, referral_code } = req.body;
     if (!phone || !referral_code) return res.status(400).json({ error: 'Phone and referral_code required' });
 
-    // Find referrer by their referral code
+    const normalizedCode = String(referral_code).trim().toUpperCase();
+
+    // Find referrer by their referral code (case-insensitive)
     const { data: referrer } = await supabase.from('users')
       .select('id, phone')
-      .eq('referral_code', referral_code)
-      .single();
+      .ilike('referral_code', normalizedCode)
+      .maybeSingle();
 
     if (!referrer) return res.status(404).json({ error: 'Invalid referral code' });
     if (referrer.phone === phone) return res.status(400).json({ error: 'Cannot refer yourself' });
