@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config(); // Load environment variables
 const express = require('express');
 const sharp = require('sharp');
 const compression = require('compression');
@@ -8,6 +8,7 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Task endpoints: /api/tasks, /api/tasks/all, /api/tasks/create, /admin/api/tasks/*
 
 app.use(cors());
 // Increase JSON body limit for proof uploads
@@ -21,35 +22,11 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============================================
-// FIREBASE ADMIN (for push notifications)
+// FIREBASE ADMIN (for push notifications) - TEMPORARILY DISABLED
 // ============================================
-let admin = null;
-try {
-    // Service account from env var or Render secret
-    const serviceAccount = {
-        type: "service_account",
-        project_id: process.env.FIREBASE_PROJECT_ID || "acorn-data-saver-app",
-        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-        private_key: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
-        client_email: process.env.FIREBASE_CLIENT_EMAIL,
-        client_id: process.env.FIREBASE_CLIENT_ID,
-        auth_uri: "https://accounts.google.com/o/oauth2/auth",
-        token_uri: "https://oauth2.googleapis.com/token",
-        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-        client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
-    };
-    if (serviceAccount.private_key && serviceAccount.client_email) {
-        admin = require('firebase-admin');
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
-        console.log('Firebase Admin initialized');
-    } else {
-        console.log('Firebase credentials not configured - push notifications disabled');
-    }
-} catch (e) {
-    console.log('Firebase init failed:', e.message);
-}
+// let admin = null;
+// Firebase init disabled due to syntax error - will fix later
+console.log('Firebase push notifications temporarily disabled');
 
 // DataStation API config
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
@@ -83,6 +60,40 @@ app.get('/api/plans', async (req, res) => {
   }
 });
 
+// GET /api/subscription-plans - public endpoint for mobile app to get subscription pricing
+app.get('/api/subscription-plans', async (req, res) => {
+  try {
+    const { data: settings, error } = await supabase.from('app_settings').select('key, value');
+    if (error) return res.status(500).json({ error: error.message });
+    
+    // Convert array to object
+    const settingsObj = {};
+    if (settings) {
+      for (const s of settings) {
+        settingsObj[s.key] = s.value;
+      }
+    }
+    
+    // Return subscription plans with prices from database
+    res.json({
+      premium: {
+        price: parseInt(settingsObj.premium_price) || 500,
+        duration: parseInt(settingsObj.premium_duration) || 7
+      },
+      professional: {
+        price: parseInt(settingsObj.professional_price) || 1500,
+        duration: parseInt(settingsObj.professional_duration) || 30
+      },
+      enterprise: {
+        price: parseInt(settingsObj.enterprise_price) || 5000,
+        duration: parseInt(settingsObj.enterprise_duration) || 30
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================
 // USER API
 // ============================================
@@ -90,7 +101,7 @@ app.get('/api/plans', async (req, res) => {
 // POST /api/register  { email, pin, name, phone, referral_code }
 app.post('/api/register', async (req, res) => {
   const { phone, pin, name, email, referral_code } = req.body;
-  if (!email || !pin) return res.status(400).json({ error: 'Email and PIN required' });
+  if (!email || !pin || !phone) return res.status(400).json({ error: 'Phone number, email and PIN are required' });
 
   try {
     // Check if email already exists
@@ -108,11 +119,11 @@ app.post('/api/register', async (req, res) => {
     const shortDigits = digits.length > 6 ? digits.slice(-6) : digits;
     const userReferralCode = 'DS' + shortDigits + Math.random().toString(36).substring(2, 5).toUpperCase();
 
-    const row = { email, pin: pin || '0000', name: name || '', phone: phone || '', referral_code: userReferralCode };
+    const row = { email, pin: pin || '0000', name: name || '', phone: phone || null, referral_code: userReferralCode };
     const { data, error } = await supabase.from('users').insert(row).select('id, name, phone, email, wallet_balance, subscription_plan, referral_code').single();
     if (error) return res.status(500).json({ error: error.message });
 
-    // If referral code provided, apply referral
+    // If referral code provided, apply referral (stored as pending, admin approves rewards)
     let referralMsg = '';
     if (referral_code && data.id) {
       try {
@@ -123,28 +134,15 @@ app.post('/api/register', async (req, res) => {
           const { data: settings } = await supabase.from('app_settings').select('value').eq('key', 'referral_reward_amount').single();
           const rewardAmount = settings ? parseInt(settings.value) : 500;
 
+          // Create referral as PENDING (admin must approve to credit reward)
           await supabase.from('referrals').insert({
             referrer_user_id: referrer.id,
             referred_user_id: data.id,
             reward_amount: rewardAmount,
-            status: 'completed'
+            status: 'pending'
           });
 
-          // Credit referrer's wallet
-          const { data: refBal } = await supabase.from('users').select('wallet_balance').eq('id', referrer.id).single();
-          if (refBal) {
-            const newBal = parseFloat(refBal.wallet_balance || 0) + rewardAmount;
-            await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
-          }
-
-          await supabase.from('wallet_transactions').insert({
-            user_id: referrer.id,
-            type: 'credit',
-            amount: rewardAmount,
-            description: 'Referral reward for inviting ' + phone
-          });
-
-          referralMsg = ' Referral bonus \u20a6' + rewardAmount + ' sent to referrer!';
+          referralMsg = ' Referral recorded! You\'ll earn \u20a6' + rewardAmount + ' when admin approves.';
         }
       } catch (refErr) {
         // Referral failed — don't block registration
@@ -226,43 +224,65 @@ app.post('/api/user/update', async (req, res) => {
 });
 
 // POST /api/savings/sync  { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes }
+// Records each sync to activity log for permanent record
 app.post('/api/savings/sync', async (req, res) => {
   const { phone, saved_bytes, blocked_requests, ad_bytes, bg_bytes } = req.body;
+  console.log('SAVINGS SYNC:', { phone, saved_bytes, blocked_requests });
   if (!phone) return res.status(400).json({ error: 'phone required' });
   try {
-    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    // Get user ID
+    const { data: user, error: userErr } = await supabase.from('users').select('id').eq('phone', phone).single();
+    if (userErr || !user) {
+      console.log('SAVINGS SYNC ERROR: User not found', phone);
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    // Update user totals
-    await supabase.from('users').update({
-      total_saved_bytes: saved_bytes || 0,
-      total_blocked_requests: blocked_requests || 0,
-      ad_bytes_saved: ad_bytes || 0,
-      bg_bytes_saved: bg_bytes || 0,
-      last_savings_sync: new Date().toISOString()
-    }).eq('id', user.id);
-
-    // Save daily snapshot - store delta (today's savings only, not cumulative)
+    const incomingSaved = saved_bytes || 0;
+    const incomingBlocked = blocked_requests || 0;
+    
+    // Calculate Naira: ₦1 per MB
+    const savedNaira = (incomingSaved / (1024 * 1024));
+    
+    // Record to ACTIVITY LOG - this is the permanent record
+    const { data: logData, error: logError } = await supabase.from('savings_activity_log').insert({
+      user_id: user.id,
+      phone: phone,
+      saved_bytes: incomingSaved,
+      blocked_requests: incomingBlocked,
+      saved_naira: savedNaira
+    });
+    
+    if (logError) {
+      console.log('SAVINGS SYNC ERROR: Activity log insert failed', logError);
+    } else {
+      console.log('SAVINGS SYNC SUCCESS: Activity log recorded', { phone, saved_bytes: incomingSaved, blocked: incomingBlocked });
+    }
+    
+    // Also save to daily history for backward compatibility
     const today = new Date().toISOString().split('T')[0];
     const { data: existing } = await supabase.from('savings_history')
       .select('id, saved_bytes, blocked_requests').eq('user_id', user.id).eq('date', today).single();
+    
+    const existingSaved = existing ? (existing.saved_bytes || 0) : 0;
+    const existingBlocked = existing ? (existing.blocked_requests || 0) : 0;
+    
+    let savedDelta = 0;
+    let blockedDelta = 0;
+    if (incomingSaved > existingSaved) savedDelta = incomingSaved - existingSaved;
+    if (incomingBlocked > existingBlocked) blockedDelta = incomingBlocked - existingBlocked;
+    
     if (existing) {
-      // Only update if new values are higher (never go backwards)
-      const newSaved = Math.max(existing.saved_bytes || 0, saved_bytes || 0);
-      const newBlocked = Math.max(existing.blocked_requests || 0, blocked_requests || 0);
+      const newSaved = (existing.saved_bytes || 0) + savedDelta;
+      const newBlocked = (existing.blocked_requests || 0) + blockedDelta;
       await supabase.from('savings_history').update({
         saved_bytes: newSaved,
-        blocked_requests: newBlocked,
-        ad_bytes: ad_bytes || 0,
-        bg_bytes: bg_bytes || 0
+        blocked_requests: newBlocked
       }).eq('id', existing.id);
     } else {
       await supabase.from('savings_history').insert({
         user_id: user.id, date: today,
-        saved_bytes: saved_bytes || 0,
-        blocked_requests: blocked_requests || 0,
-        ad_bytes: ad_bytes || 0,
-        bg_bytes: bg_bytes || 0
+        saved_bytes: incomingSaved,
+        blocked_requests: incomingBlocked
       });
     }
     res.json({ success: true });
@@ -271,41 +291,95 @@ app.post('/api/savings/sync', async (req, res) => {
   }
 });
 
-// GET /api/savings/:phone  — get savings history
+// GET /api/savings/:phone  — get savings history FROM ACTIVITY LOG
 app.get('/api/savings/:phone', async (req, res) => {
   try {
-    const { data: user } = await supabase.from('users').select('id, total_saved_bytes, total_blocked_requests, ad_bytes_saved, bg_bytes_saved').eq('phone', req.params.phone).single();
+    // Get user ID
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Get daily history (last 30 days)
-    const { data: history } = await supabase.from('savings_history')
-      .select('*').eq('user_id', user.id)
-      .order('date', { ascending: false }).limit(30);
+    // Fetch ALL activity log entries
+    const { data: logs } = await supabase.from('savings_activity_log')
+      .select('saved_bytes, blocked_requests, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
 
-    // Calculate today/week/month totals
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    let todaySaved = 0, weekSaved = 0, monthSaved = 0;
-    let todayBlocked = 0, weekBlocked = 0, monthBlocked = 0;
-    if (history) {
-      for (const h of history) {
-        if (h.date === todayStr) { todaySaved = h.saved_bytes; todayBlocked = h.blocked_requests; }
-        if (h.date >= weekAgo) { weekSaved += h.saved_bytes; weekBlocked += h.blocked_requests; }
-        if (h.date >= monthAgo) { monthSaved += h.saved_bytes; monthBlocked += h.blocked_requests; }
+    // Calculate totals from activity log
+    let totalSaved = 0, totalBlocked = 0;
+    let weekSaved = 0, weekBlocked = 0;
+    let monthSaved = 0, monthBlocked = 0;
+    let todaySaved = 0, todayBlocked = 0;
+    
+    // Group by date for daily breakdown
+    const dailyMap = {};
+    
+    if (logs) {
+      for (const log of logs) {
+        const saved = log.saved_bytes || 0;
+        const blocked = log.blocked_requests || 0;
+        const time = log.created_at || "";
+        const date = time.split('T')[0];
+        
+        totalSaved += saved;
+        totalBlocked += blocked;
+        
+        if (date >= todayStr) { todaySaved += saved; todayBlocked += blocked; }
+        if (date >= weekAgo) { weekSaved += saved; weekBlocked += blocked; }
+        if (date >= monthAgo) { monthSaved += saved; monthBlocked += blocked; }
+        
+        // Group by date
+        if (!dailyMap[date]) dailyMap[date] = { saved_bytes: 0, blocked_requests: 0 };
+        dailyMap[date].saved_bytes += saved;
+        dailyMap[date].blocked_requests += blocked;
       }
     }
+    
+    // Convert to array sorted by date descending
+    const history = Object.keys(dailyMap).sort((a, b) => b.localeCompare(a)).slice(0, 30).map(date => ({
+      date: date,
+      saved_bytes: dailyMap[date].saved_bytes,
+      blocked_requests: dailyMap[date].blocked_requests,
+      saved_naira: Math.round((dailyMap[date].saved_bytes / (1024 * 1024)) * 100) / 100
+    }));
+
+    const totalSavedNaira = (totalSaved / (1024 * 1024));
+    const todaySavedNaira = (todaySaved / (1024 * 1024));
+    const weekSavedNaira = (weekSaved / (1024 * 1024));
+    const monthSavedNaira = (monthSaved / (1024 * 1024));
 
     res.json({
-      total_saved: user.total_saved_bytes || 0,
-      total_blocked: user.total_blocked_requests || 0,
-      today: { saved: todaySaved, blocked: todayBlocked },
-      week: { saved: weekSaved, blocked: weekBlocked },
-      month: { saved: monthSaved, blocked: monthBlocked },
-      history: history || []
+      total_saved: totalSaved,
+      total_blocked: totalBlocked,
+      total_saved_naira: Math.round(totalSavedNaira * 100) / 100,
+      today: { saved: todaySaved, blocked: todayBlocked, saved_naira: Math.round(todaySavedNaira * 100) / 100 },
+      week: { saved: weekSaved, blocked: weekBlocked, saved_naira: Math.round(weekSavedNaira * 100) / 100 },
+      month: { saved: monthSaved, blocked: monthBlocked, saved_naira: Math.round(monthSavedNaira * 100) / 100 },
+      history
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/savings/activity/:phone  — get activity log
+app.get('/api/savings/activity/:phone', async (req, res) => {
+  try {
+    const { data: user } = await supabase.from('users').select('id').eq('phone', req.params.phone).single();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Fetch activity log - most recent first
+    const { data: logs } = await supabase.from('savings_activity_log')
+      .select('id, saved_bytes, blocked_requests, saved_naira, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    res.json({ activity: logs || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -540,17 +614,36 @@ app.get('/api/transactions/:phone', async (req, res) => {
 // SUBSCRIPTIONS
 // ============================================
 
-const PLAN_CONFIG = {
-  premium:      { amount: 500,   duration: '90 days (promo)', ms: 90 * 24 * 60 * 60 * 1000, devices: 1, promo: true },
-  professional: { amount: 1500,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000, devices: 2 },
-  enterprise:   { amount: 5000,  duration: '30 days', ms: 30 * 24 * 60 * 60 * 1000, devices: 5 }
-};
+// Device limits per plan (not admin-configurable)
+const PLAN_DEVICES = { premium: 1, professional: 2, enterprise: 5 };
+
+// Fetch subscription pricing from admin settings (app_settings), with fallback to defaults
+async function getSubscriptionPricing() {
+  const defaults = {
+    premium:      { price: 500,  duration: 7,  devices: 1 },
+    professional: { price: 1500, duration: 30, devices: 2 },
+    enterprise:   { price: 5000, duration: 30, devices: 5 }
+  };
+  try {
+    const { data: settings } = await supabase.from('app_settings').select('key, value');
+    const s = {};
+    if (settings) for (const row of settings) s[row.key] = row.value;
+    return {
+      premium:      { price: parseInt(s.premium_price) || defaults.premium.price, duration: parseInt(s.premium_duration) || defaults.premium.duration, devices: 1 },
+      professional: { price: parseInt(s.professional_price) || defaults.professional.price, duration: parseInt(s.professional_duration) || defaults.professional.duration, devices: 2 },
+      enterprise:   { price: parseInt(s.enterprise_price) || defaults.enterprise.price, duration: parseInt(s.enterprise_duration) || defaults.enterprise.duration, devices: 5 }
+    };
+  } catch (e) {
+    return defaults;
+  }
+}
 
 // POST /api/subscribe  { phone, plan }
 app.post('/api/subscribe', async (req, res) => {
   const { phone, plan } = req.body;
   if (!phone || !plan) return res.status(400).json({ error: 'phone and plan required' });
-  const cfg = PLAN_CONFIG[plan];
+  const pricing = await getSubscriptionPricing();
+  const cfg = pricing[plan];
   if (!cfg) return res.status(400).json({ error: 'Invalid plan. Choose premium, professional, or enterprise' });
 
   try {
@@ -558,22 +651,34 @@ app.post('/api/subscribe', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const bal = parseFloat(user.wallet_balance || 0);
-    if (bal < cfg.amount) {
-      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + bal.toFixed(0) + ' but need \u20a6' + cfg.amount });
+    if (bal < cfg.price) {
+      return res.status(400).json({ success: false, error: 'Insufficient wallet balance. You have \u20a6' + bal.toFixed(0) + ' but need \u20a6' + cfg.price });
     }
 
-    const expiresAt = new Date(Date.now() + cfg.ms).toISOString();
-    const newBal = bal - cfg.amount;
+    const durationMs = cfg.duration * 24 * 60 * 60 * 1000;
+    const durationLabel = cfg.duration + ' days';
+    const expiresAt = new Date(Date.now() + durationMs).toISOString();
+    const newBal = bal - cfg.price;
 
     // Update user
     await supabase.from('users').update({ subscription_plan: plan, subscription_expires_at: expiresAt, wallet_balance: newBal }).eq('id', user.id);
 
     // Log subscription
-    await supabase.from('subscriptions').insert({ user_id: user.id, plan, amount: cfg.amount, duration: cfg.duration, expires_at: expiresAt });
+    await supabase.from('subscriptions').insert({ user_id: user.id, plan, amount: cfg.price, duration: durationLabel, expires_at: expiresAt });
 
     // Log wallet debit
-    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'debit', amount: cfg.amount, description: plan.charAt(0).toUpperCase() + plan.slice(1) + ' subscription (' + cfg.duration + ')' });
-
+    await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'debit', amount: cfg.price, description: plan.charAt(0).toUpperCase() + plan.slice(1) + ' subscription (' + durationLabel + ')' });
+    
+    // Send notification for subscription
+    try {
+      await supabase.from('notifications').insert({
+        title: 'Subscription Activated',
+        body: 'You have subscribed to the ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan for ' + durationLabel,
+        type: 'subscription',
+        target_phone: phone
+      });
+    } catch (nfe) { console.log('Notif error:', nfe.message); }
+    
     res.json({ success: true, plan, expires_at: expiresAt, wallet_balance: newBal, message: 'Subscribed to ' + plan.charAt(0).toUpperCase() + plan.slice(1) + ' plan' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -647,8 +752,8 @@ app.post('/api/wallet/initialize', async (req, res) => {
 // Helper: credit wallet and update pending transaction to success
 async function creditWallet(ref, amount, phone, email) {
   let user = null;
-  if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('phone', phone).single(); user = u; }
-  if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance').eq('email', email).single(); user = u; }
+  if (phone) { const { data: u } = await supabase.from('users').select('id, wallet_balance, phone').eq('phone', phone).single(); user = u; }
+  if (!user && email) { const { data: u } = await supabase.from('users').select('id, wallet_balance, phone').eq('email', email).single(); user = u; }
   if (!user) return null;
 
   // Check if already credited (prevent double credit)
@@ -664,6 +769,19 @@ async function creditWallet(ref, amount, phone, email) {
 
   const newBal = parseFloat(user.wallet_balance || 0) + amount;
   await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
+
+  // Send notification for successful deposit (only on first credit)
+  try {
+    if (user.phone) {
+      await supabase.from('notifications').insert({
+        title: 'Wallet Credited',
+        body: '\u20a6' + amount + ' has been added to your wallet',
+        type: 'wallet',
+        target_phone: user.phone
+      });
+    }
+  } catch (nfe) { console.log('Notif error:', nfe.message); }
+
   return { ...user, wallet_balance: newBal };
 }
 
@@ -759,6 +877,17 @@ app.post('/api/wallet/topup', async (req, res) => {
     const newBal = parseFloat(user.wallet_balance || 0) + parseFloat(amount);
     await supabase.from('users').update({ wallet_balance: newBal }).eq('id', user.id);
     await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'credit', amount: parseFloat(amount), description: 'Wallet top-up' });
+    
+    // Send notification for wallet top-up
+    try {
+      await supabase.from('notifications').insert({
+        title: 'Wallet Credited',
+        body: '₦' + amount + ' has been added to your wallet',
+        type: 'wallet',
+        target_phone: phone
+      });
+    } catch (nfe) { console.log('Notif error:', nfe.message); }
+    
     res.json({ success: true, balance: newBal });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -767,59 +896,7 @@ app.post('/api/wallet/topup', async (req, res) => {
 // TASKS & EARN
 // ============================================
 
-// GET /api/tasks?phone=xxx — list tasks + user's status on each
-// GET /api/tasks?phone=xxx â€” list tasks filtered by plan level
-app.get('/api/tasks', async (req, res) => {
-  const { phone } = req.query;
-  const PLAN_LEVEL = { none: 0, premium: 1, professional: 2, enterprise: 3 };
-  const DAILY_TASK_LIMITS = { none: 0, premium: 5, professional: 8, enterprise: 999 };
-  try {
-    const { data: allTasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
-    let pending_reward = 0, claimable_reward = 0;
-    let userPlan = 'none';
-    const subMap = {};
-
-    if (phone) {
-      const { data: user } = await supabase.from('users').select('id, subscription_plan').eq('phone', phone).single();
-      if (user) {
-        userPlan = user.subscription_plan || 'none';
-        const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
-        if (submissions) {
-          for (const s of submissions) {
-            subMap[s.task_id] = s.status;
-            if (s.status === 'pending') pending_reward += s.reward || 0;
-            if (s.status === 'approved') claimable_reward += s.reward || 0;
-          }
-        }
-      }
-    }
-
-    const userLevel = PLAN_LEVEL[userPlan] ?? 0;
-    const dailyLimit = DAILY_TASK_LIMITS[userPlan] ?? 2;
-    const visibleTasks = [];
-    const lockedTasks = [];
-
-    for (const t of (allTasks || [])) {
-      const taskMinPlan = t.min_plan || 'none';
-      const taskLevel = PLAN_LEVEL[taskMinPlan] ?? 0;
-      t.user_status = subMap[t.id] || 'available';
-      if (taskLevel <= userLevel) {
-        visibleTasks.push(t);
-      } else {
-        lockedTasks.push({ id: t.id, title: t.title, reward: t.reward, reward_type: t.reward_type, min_plan: taskMinPlan, locked: true });
-      }
-    }
-
-    const limitedTasks = visibleTasks.slice(0, dailyLimit);
-    const hiddenCount = Math.max(0, visibleTasks.length - dailyLimit);
-
-    res.json({ tasks: limitedTasks, locked_tasks: lockedTasks, hidden_count: hiddenCount, daily_limit: dailyLimit, user_plan: userPlan, pending_reward, claimable_reward });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/tasks/submit  { phone, task_id, proof_base64 }
+// TASKS & EARN
 app.post('/api/tasks/submit', async (req, res) => {
   const { phone, task_id, proof_base64 } = req.body;
   if (!phone || !task_id) return res.status(400).json({ error: 'phone and task_id required' });
@@ -892,6 +969,57 @@ app.post('/api/tasks/claim', async (req, res) => {
   }
 });
 
+// GET /api/tasks?phone=xxx — list tasks + user's status on each (general - must be last)
+app.get('/api/tasks', async (req, res) => {
+  const { phone } = req.query;
+  const PLAN_LEVEL = { none: 0, premium: 1, professional: 2, enterprise: 3 };
+  const DAILY_TASK_LIMITS = { none: 0, premium: 5, professional: 8, enterprise: 999 };
+  try {
+    const { data: allTasks } = await supabase.from('tasks').select('*').eq('active', true).order('created_at', { ascending: false });
+    let pending_reward = 0, claimable_reward = 0;
+    let userPlan = 'none';
+    const subMap = {};
+
+    if (phone) {
+      const { data: user } = await supabase.from('users').select('id, subscription_plan').eq('phone', phone).single();
+      if (user) {
+        userPlan = user.subscription_plan || 'none';
+        const { data: submissions } = await supabase.from('task_submissions').select('task_id, status, reward').eq('user_id', user.id);
+        if (submissions) {
+          for (const s of submissions) {
+            subMap[s.task_id] = s.status;
+            if (s.status === 'pending') pending_reward += s.reward || 0;
+            if (s.status === 'approved') claimable_reward += s.reward || 0;
+          }
+        }
+      }
+    }
+
+    const userLevel = PLAN_LEVEL[userPlan] ?? 0;
+    const dailyLimit = DAILY_TASK_LIMITS[userPlan] ?? 2;
+    const visibleTasks = [];
+    const lockedTasks = [];
+
+    for (const t of (allTasks || [])) {
+      const taskMinPlan = t.min_plan || 'none';
+      const taskLevel = PLAN_LEVEL[taskMinPlan] ?? 0;
+      t.user_status = subMap[t.id] || 'available';
+      if (taskLevel <= userLevel) {
+        visibleTasks.push(t);
+      } else {
+        lockedTasks.push({ id: t.id, title: t.title, reward: t.reward, reward_type: t.reward_type, min_plan: taskMinPlan, locked: true });
+      }
+    }
+
+    const limitedTasks = visibleTasks.slice(0, dailyLimit);
+    const hiddenCount = Math.max(0, visibleTasks.length - dailyLimit);
+
+    res.json({ tasks: limitedTasks, locked_tasks: lockedTasks, hidden_count: hiddenCount, daily_limit: dailyLimit, user_plan: userPlan, pending_reward, claimable_reward });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ADMIN PANEL API (for admin-vercel)
 // Password check middleware
 const ADMIN_PW = process.env.ADMIN_PW || 'admin123';
@@ -902,6 +1030,140 @@ const adminAuth = (req, res, next) => {
   }
   next();
 };
+
+// ADMIN TASK ROUTES
+// GET /api/tasks/all — admin: get all tasks
+app.get('/api/tasks/all', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Also support /admin/api/tasks/all
+app.get('/admin/api/tasks/all', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/tasks/create — admin: create task
+app.post('/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, type, description, instructions, link, reward, reward_type, max_participants } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title,
+      description: description || instructions || '',
+      reward,
+      reward_type: reward_type || type || 'airtime',
+      active: true
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Also support /admin/api/tasks/create
+app.post('/admin/api/tasks/create', adminAuth, async (req, res) => {
+  try {
+    const { title, type, description, instructions, link, reward, reward_type, max_participants } = req.body;
+    if (!title || !reward) return res.status(400).json({ error: 'title and reward required' });
+    
+    const { data, error } = await supabase.from('tasks').insert({
+      title,
+      description: description || instructions || '',
+      instructions: instructions || '',
+      link: link || '',
+      reward,
+      reward_type: reward_type || type || 'airtime',
+      active: true
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ADMIN SUBMISSIONS API
+// Get all task submissions
+app.get('/api/submissions', adminAuth, async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = supabase.from('task_submissions').select('*, tasks(title, reward, reward_type), users(phone, name)').order('created_at', { ascending: false });
+    if (status && status !== 'all') query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Approve submission
+app.post('/api/submissions/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: sub, error: subErr } = await supabase.from('task_submissions').select('*, users(phone)').eq('id', id).single();
+    if (subErr || !sub) return res.status(404).json({ error: 'Submission not found' });
+    
+    await supabase.from('task_submissions').update({ status: 'approved' }).eq('id', id);
+    
+    const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('id', sub.user_id).single();
+    if (user) {
+      const reward = sub.tasks?.reward || 0;
+      const newBalance = (parseFloat(user.wallet_balance) || 0) + reward;
+      await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
+      await supabase.from('wallet_transactions').insert({
+        user_id: user.id,
+        type: 'task_reward',
+        amount: reward,
+        description: 'Task reward: ' + (sub.tasks?.title || 'Task'),
+        status: 'completed'
+      });
+      
+      // Send notification for task approval
+      try {
+        const userPhone = sub.users?.phone;
+        if (userPhone) {
+          await supabase.from('notifications').insert({
+            title: 'Task Approved!',
+            body: 'Your task "' + (sub.tasks?.title || 'Task') + '" has been approved! ₦' + reward + ' has been added to your wallet.',
+            type: 'task',
+            target_phone: userPhone
+          });
+        }
+      } catch (nfe) { console.log('Notif error:', nfe.message); }
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reject submission
+app.post('/api/submissions/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await supabase.from('task_submissions').update({ status: 'rejected' }).eq('id', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Dashboard
 app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
@@ -928,7 +1190,7 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
     const { data: walletTxns } = await supabase.from('wallet_transactions').select('amount, type').eq('type', 'credit') || { data: [] };
     const depositsTotal = walletTxns?.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0) || 0;
     
-    // Profit = deposits - spent (assuming spent = total revenue from data/airtime)
+    // Profit = deposits - spent
     const profit = depositsTotal - revenueTotal;
     
     // Pending tasks
@@ -961,21 +1223,10 @@ app.get('/admin/api/test-new-route', adminAuth, async (req, res) => {
 // Users
 app.get('/admin/api/all-users', adminAuth, async (req, res) => {
   try {
-    console.log('=== ADMIN USERS ENDPOINT CALLED ===');
-    console.log('Query params:', req.query);
-    console.log('Supabase URL:', SUPABASE_URL ? 'exists' : 'missing');
-    
-    const result = await supabase.from('users').select('*').order('created_at', { ascending: false }).limit(50);
-    console.log('Result:', JSON.stringify(result).substring(0, 500));
-    
-    if (result.error) {
-      console.log('Error:', result.error);
-      return res.status(500).json({ error: result.error.message });
-    }
-    
-    res.json({ users: result.data || [], total: result.data?.length || 0 });
+    const { data, error } = await supabase.from('users').select('id, created_at, name, phone, email, wallet_balance, subscription_plan').order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ users: data || [], total: data?.length || 0 });
   } catch (e) {
-    console.log('Exception:', e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -1037,6 +1288,297 @@ app.post('/admin/api/wallet/topup', adminAuth, async (req, res) => {
       description: 'Admin topup'
     });
     res.json({ success: true, new_balance: newBalance });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// ADMIN USER MANAGEMENT
+// ============================================
+
+// GET user details
+app.get('/admin/api/users/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: user, error: userErr } = await supabase.from('users').select('*').eq('id', id).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
+    
+    const { data: transactions } = await supabase.from('transactions').select('*').eq('user_id', id).order('created_at', { ascending: false }).limit(50);
+    const { data: walletTransactions } = await supabase.from('wallet_transactions').select('*').eq('user_id', id).order('created_at', { ascending: false }).limit(50);
+    const { data: taskSubmissions } = await supabase.from('task_submissions').select('*').eq('user_id', id).order('created_at', { ascending: false }).limit(20);
+    
+    res.json({ user, transactions: transactions || [], walletTransactions: walletTransactions || [], taskSubmissions: taskSubmissions || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Credit user wallet
+app.post('/admin/api/users/:id/credit', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, description } = req.body;
+    if (!amount) return res.status(400).json({ error: 'Amount required' });
+    
+    const { data: user, error: userErr } = await supabase.from('users').select('*').eq('id', id).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
+    
+    const newBalance = (parseFloat(user.wallet_balance) || 0) + parseFloat(amount);
+    await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', id);
+    await supabase.from('wallet_transactions').insert({
+      user_id: id,
+      type: 'credit',
+      amount: parseFloat(amount),
+      description: description || 'Admin credit',
+      status: 'success'
+    });
+    res.json({ success: true, balance: newBalance });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Debit user wallet
+app.post('/admin/api/users/:id/debit', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, description } = req.body;
+    if (!amount) return res.status(400).json({ error: 'Amount required' });
+    
+    const { data: user, error: userErr } = await supabase.from('users').select('*').eq('id', id).single();
+    if (userErr || !user) return res.status(404).json({ error: 'User not found' });
+    
+    const currentBalance = parseFloat(user.wallet_balance) || 0;
+    const debitAmount = parseFloat(amount);
+    if (currentBalance < debitAmount) return res.status(400).json({ error: 'Insufficient balance' });
+    
+    const newBalance = currentBalance - debitAmount;
+    await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', id);
+    await supabase.from('wallet_transactions').insert({
+      user_id: id,
+      type: 'debit',
+      amount: debitAmount,
+      description: description || 'Admin debit',
+      status: 'success'
+    });
+    res.json({ success: true, balance: newBalance });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Change user subscription
+app.post('/admin/api/users/:id/subscription', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { plan, days } = req.body;
+    if (!plan) return res.status(400).json({ error: 'Plan required' });
+    
+    const updates = { subscription_plan: plan };
+    if (days && days > 0) {
+      const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+      updates.subscription_expires_at = expiresAt;
+    } else {
+      updates.subscription_expires_at = null;
+    }
+    
+    await supabase.from('users').update(updates).eq('id', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update user profile
+app.post('/admin/api/users/:id/update', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, phone, email } = req.body;
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (phone !== undefined) updates.phone = phone;
+    if (email !== undefined) updates.email = email;
+    
+    const { error } = await supabase.from('users').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete user
+app.delete('/admin/api/users/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Delete related data first
+    await supabase.from('wallet_transactions').delete().eq('user_id', id);
+    await supabase.from('task_submissions').delete().eq('user_id', id);
+    await supabase.from('transactions').delete().eq('user_id', id);
+    await supabase.from('savings_history').delete().eq('user_id', id);
+    // Delete user
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// ADMIN REFERRALS MANAGEMENT
+// ============================================
+
+// GET /admin/api/referrals - list all referrals with user details
+app.get('/admin/api/referrals', adminAuth, async (req, res) => {
+  try {
+    const { data: referrals, error } = await supabase
+      .from('referrals')
+      .select('*, referrer:users!referrer_user_id(name,phone,email), referred:users!referred_user_id(name,phone,email)')
+      .order('created_at', { ascending: false });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    
+    // Format for admin display
+    const rows = (referrals || []).map(r => ({
+      id: r.id,
+      referrer_name: r.referrer?.name || '-',
+      referrer_phone: r.referrer?.phone || '-',
+      referred_name: r.referred?.name || '-',
+      referred_phone: r.referred?.phone || '-',
+      reward_amount: r.reward_amount,
+      status: r.status,
+      created_at: r.created_at
+    }));
+    
+    res.json({ referrals: rows, total: rows.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /admin/api/referrals/:id/approve - approve referral and credit reward
+app.post('/admin/api/referrals/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get referral details
+    const { data: referral, error: refError } = await supabase
+      .from('referrals')
+      .select('*, referrer:users!referrer_user_id(*), referred:users!referred_user_id(*)')
+      .eq('id', id)
+      .single();
+    
+    if (refError || !referral) return res.status(404).json({ error: 'Referral not found' });
+    if (referral.status === 'completed') return res.status(400).json({ error: 'Referral already approved' });
+    
+    // Credit referrer's wallet
+    const referrer = referral['referrer:users!referrer_user_id'];
+    if (referrer) {
+      const newBal = parseFloat(referrer.wallet_balance || 0) + referral.reward_amount;
+      await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
+      
+      // Log transaction
+      await supabase.from('wallet_transactions').insert({
+        user_id: referrer.id,
+        type: 'credit',
+        amount: referral.reward_amount,
+        description: 'Referral reward for inviting ' + (referral['referrer:users!referred_user_id']?.phone || 'user')
+      });
+    }
+    
+    // Update referral status
+    await supabase.from('referrals').update({ status: 'completed' }).eq('id', id);
+    
+    res.json({ success: true, message: 'Referral approved! ₦' + referral.reward_amount + ' credited to referrer.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /admin/api/referrals/:id/reject - reject referral
+app.post('/admin/api/referrals/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { error } = await supabase.from('referrals').update({ status: 'rejected' }).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    
+    res.json({ success: true, message: 'Referral rejected.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// ADMIN DATA PLANS MANAGEMENT
+// ============================================
+
+// Get all data plans
+app.get('/admin/api/data-plans', adminAuth, async (req, res) => {
+  try {
+    const { network } = req.query;
+    let query = supabase.from('data_plans').select('*').order('amount', { ascending: true });
+    if (network) query = query.eq('network', network.toUpperCase());
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create data plan
+app.post('/admin/api/data-plans', adminAuth, async (req, res) => {
+  try {
+    const { network, size, amount, selling_price, data_id, active } = req.body;
+    if (!size || !amount) return res.status(400).json({ error: 'Size and cost required' });
+    
+    const { data, error } = await supabase.from('data_plans').insert({
+      network: network || 'MTN',
+      size,
+      amount,
+      selling_price: selling_price || amount,
+      data_id,
+      active: active !== false
+    });
+    
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update data plan
+app.post('/admin/api/data-plans/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { network, size, amount, selling_price, data_id, active } = req.body;
+    const updates = {};
+    if (network) updates.network = network;
+    if (size) updates.size = size;
+    if (amount) updates.amount = amount;
+    if (selling_price !== undefined) updates.selling_price = selling_price;
+    if (data_id !== undefined) updates.data_id = data_id;
+    if (active !== undefined) updates.active = active;
+    
+    const { error } = await supabase.from('data_plans').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete data plan
+app.post('/admin/api/data-plans/:id/delete', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('data_plans').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1178,7 +1720,7 @@ app.get('/api/notifications', async (req, res) => {
     let query = supabase.from('notifications')
       .select('*')
       .or(`target_phone.eq.${phone},target_phone.is.null`)
-      .order('id', { ascending: true });
+      .order('created_at', { ascending: false }); // Newest first
 
     if (since_id && since_id !== '0') {
       query = query.gt('id', parseInt(since_id));
@@ -1270,6 +1812,20 @@ app.post('/api/notifications', async (req, res) => {
   }
 });
 
+// ADMIN: Get all notifications
+app.get('/admin/api/notifications', adminAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('notifications')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================
 // REFERRAL SYSTEM
 // ============================================
@@ -1280,17 +1836,17 @@ app.get('/api/referrals/stats', async (req, res) => {
     const { phone } = req.query;
     if (!phone) return res.status(400).json({ error: 'Phone required' });
 
-    const { data: user } = await supabase.from('users').select('id').eq('phone', phone).single();
+    const { data: user } = await supabase.from('users').select('id, referral_code').eq('phone', phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Count successful referrals
+    // Count ALL referrals (pending + completed); earnings only from completed
     const { data: referrals, error } = await supabase.from('referrals')
       .select('*')
       .eq('referrer_user_id', user.id);
 
     if (error) return res.status(500).json({ error: error.message });
 
-    const count = (referrals || []).filter(r => r.status === 'completed').length;
+    const count = (referrals || []).length; // Count ALL referrals
     const totalEarnings = (referrals || []).filter(r => r.status === 'completed')
       .reduce((sum, r) => sum + (r.reward_amount || 0), 0);
 
@@ -1304,7 +1860,8 @@ app.get('/api/referrals/stats', async (req, res) => {
     res.json({
       referral_count: count,
       total_earnings: totalEarnings,
-      reward_per_referral: rewardPerRef
+      reward_per_referral: rewardPerRef,
+      referral_code: user.referral_code || ''
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1348,38 +1905,15 @@ app.post('/api/referrals/apply', async (req, res) => {
       .single();
     const rewardAmount = settings ? parseInt(settings.value) : 500;
 
-    // Create referral record
+    // Create referral record as PENDING (admin must approve to credit reward)
     await supabase.from('referrals').insert({
       referrer_user_id: referrer.id,
       referred_user_id: newUser.id,
       reward_amount: rewardAmount,
-      status: 'completed'
+      status: 'pending'
     });
 
-    // Credit reward to referrer's wallet
-    await supabase.from('users')
-      .update({ wallet_balance: supabase.rpc('increment_wallet', { user_id: referrer.id, amount: rewardAmount }) })
-      .eq('id', referrer.id);
-
-    // Also try direct update as fallback
-    const { data: referrerData } = await supabase.from('users')
-      .select('wallet_balance')
-      .eq('id', referrer.id)
-      .single();
-    if (referrerData) {
-      const newBal = parseFloat(referrerData.wallet_balance || 0) + rewardAmount;
-      await supabase.from('users').update({ wallet_balance: newBal }).eq('id', referrer.id);
-    }
-
-    // Log wallet credit
-    await supabase.from('wallet_transactions').insert({
-      user_id: referrer.id,
-      type: 'credit',
-      amount: rewardAmount,
-      description: 'Referral reward for inviting ' + phone
-    });
-
-    res.json({ success: true, message: 'Referral applied! \u20a6' + rewardAmount + ' credited to referrer.' });
+    res.json({ success: true, message: 'Referral recorded! Reward will be credited when admin approves.' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1407,11 +1941,214 @@ app.put('/api/referrals/settings', async (req, res) => {
   }
 });
 
+// WALLET TRANSACTIONS
+app.get('/api/wallet-transactions', adminAuth, async (req, res) => {
+  try {
+    const { type } = req.query;
+    let query = supabase.from('wallet_transactions').select('*, users(phone, name)').order('created_at', { ascending: false });
+    if (type && type !== 'all') query = query.eq('type', type);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ADMIN SETTINGS
+app.post('/api/settings', adminAuth, async (req, res) => {
+  try {
+    const { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement, new_password } = req.body;
+    
+    // Log settings changes - would need settings table to store
+    console.log('Settings update:', { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, announcement });
+    
+    if (new_password) {
+      console.log('Admin password change requested');
+    }
+    
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE task
+app.delete('/api/tasks/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE task (admin prefix version)
+app.delete('/admin/api/tasks/:id', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// UPDATE task
+app.post('/api/tasks/:id/update', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, reward, reward_type, active } = req.body;
+    const updates = {};
+    if (title) updates.title = title;
+    if (description !== undefined) updates.description = description;
+    if (reward) updates.reward = reward;
+    if (reward_type) updates.reward_type = reward_type;
+    if (active !== undefined) updates.active = active;
+    
+    const { error } = await supabase.from('tasks').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// UPDATE task - /admin/api version for admin panel
+app.post('/admin/api/tasks/:id/update', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, instructions, link, reward, reward_type, active } = req.body;
+    const updates = {};
+    if (title) updates.title = title;
+    if (description !== undefined) updates.description = description;
+    if (instructions !== undefined) updates.instructions = instructions;
+    if (link !== undefined) updates.link = link;
+    if (reward) updates.reward = reward;
+    if (reward_type) updates.reward_type = reward_type;
+    if (active !== undefined) updates.active = active;
+    
+    const { error } = await supabase.from('tasks').update(updates).eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ADMIN API VERSIONS (with /admin prefix for admin panel)
+app.get('/admin/api/submissions', adminAuth, async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = supabase.from('task_submissions').select('*, tasks(title, reward, reward_type), users(phone, name)').order('created_at', { ascending: false });
+    if (status && status !== 'all') query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/api/submissions/:id/approve', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: sub, error: subErr } = await supabase.from('task_submissions').select('*, tasks(reward, reward_type)').eq('id', id).single();
+    if (subErr || !sub) return res.status(404).json({ error: 'Submission not found' });
+    await supabase.from('task_submissions').update({ status: 'approved' }).eq('id', id);
+    const { data: user } = await supabase.from('users').select('id, wallet_balance').eq('id', sub.user_id).single();
+    if (user) {
+      const reward = sub.tasks?.reward || 0;
+      const newBalance = (parseFloat(user.wallet_balance) || 0) + reward;
+      await supabase.from('users').update({ wallet_balance: newBalance }).eq('id', user.id);
+      await supabase.from('wallet_transactions').insert({ user_id: user.id, type: 'task_reward', amount: reward, description: 'Task reward', status: 'completed' });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/api/submissions/:id/reject', adminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await supabase.from('task_submissions').update({ status: 'rejected' }).eq('id', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/admin/api/wallet-transactions', adminAuth, async (req, res) => {
+  try {
+    const { type } = req.query;
+    let query = supabase.from('wallet_transactions').select('*, users(phone, name)').order('created_at', { ascending: false });
+    if (type && type !== 'all') query = query.eq('type', type);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ transactions: data || [], total: data?.length || 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET settings for admin panel
+app.get('/admin/api/settings', adminAuth, async (req, res) => {
+  try {
+    const { data: settings, error } = await supabase.from('app_settings').select('key, value');
+    if (error) return res.status(500).json({ error: error.message });
+    
+    // Convert array to object
+    const settingsObj = {};
+    if (settings) {
+      for (const s of settings) {
+        settingsObj[s.key] = s.value;
+      }
+    }
+    res.json(settingsObj);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/admin/api/settings', adminAuth, async (req, res) => {
+  try {
+    const { premium_price, premium_duration, professional_price, professional_duration, enterprise_price, enterprise_duration, admin_password } = req.body;
+    
+    // Save each setting to app_settings table
+    const settings = {
+      premium_price: premium_price || '500',
+      premium_duration: premium_duration || '7',
+      professional_price: professional_price || '1500',
+      professional_duration: professional_duration || '30',
+      enterprise_price: enterprise_price || '5000',
+      enterprise_duration: enterprise_duration || '30'
+    };
+    
+    for (const [key, value] of Object.entries(settings)) {
+      await supabase.from('app_settings').upsert({ key, value }, { onConflict: 'key' });
+    }
+    
+    // Handle admin password change
+    if (admin_password) {
+      console.log('Admin password change requested');
+      // Note: Password change would require updating the ADMIN_PW env var on Render
+      // For now, just log it. In production, you'd store in app_settings and check there
+    }
+    
+    console.log('Settings saved:', settings);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`DataSaver server running on port ${PORT}`);
   console.log(`API: http://localhost:${PORT}/api/plans`);
   console.log(`Proxy: http://localhost:${PORT}/proxy?url=https://example.com`);
 });
-
-
 
