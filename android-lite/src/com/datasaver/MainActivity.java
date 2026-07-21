@@ -2921,6 +2921,7 @@ public class MainActivity extends Activity {
         }
         if (tab == 4) {
             if (earnTasksContainer == null) initEarnTab();
+            refreshReferralUI();
             loadReferralStats();
             loadEarnTab();
         }
@@ -2961,17 +2962,19 @@ public class MainActivity extends Activity {
         tvReferralCount = findViewById(R.id.tvReferralCount);
         tvReferralEarnings = findViewById(R.id.tvReferralEarnings);
         tvReferralReward = findViewById(R.id.tvReferralReward);
-
-        // Always use server as source of truth for referral code
-        String phone = prefs().getString("phone", "");
-        if (!phone.isEmpty()) {
-            tvReferralLink.setText("Loading your code...");
-            tvReferralLink.setOnClickListener(v -> copyReferralCodeOrWait());
-        }
-
+        refreshReferralUI();
         findViewById(R.id.btnShareReferral).setOnClickListener(v -> copyReferralCodeOrWait());
+    }
 
-        loadReferralStats();
+    private void refreshReferralUI() {
+        if (tvReferralLink == null) return;
+        String cached = prefs().getString("referral_code", "");
+        if (!cached.isEmpty()) {
+            tvReferralLink.setText("Your code: " + cached);
+        } else if (!prefs().getString("phone", "").isEmpty()) {
+            tvReferralLink.setText("Loading your code...");
+        }
+        tvReferralLink.setOnClickListener(v -> copyReferralCodeOrWait());
     }
 
     private void copyReferralCodeOrWait() {
@@ -3003,15 +3006,21 @@ public class MainActivity extends Activity {
     }
 
     private void loadReferralStats(Runnable onCodeReady) {
+        loadReferralStatsWithRetry(0, onCodeReady);
+    }
+
+    private void loadReferralStatsWithRetry(int attempt, Runnable onCodeReady) {
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) return;
         new Thread(() -> {
             try {
-                URL url = new URL(SERVER_URL + "/api/referrals/stats?phone=" + phone);
+                String encodedPhone = java.net.URLEncoder.encode(phone, "UTF-8");
+                URL url = new URL(SERVER_URL + "/api/referrals/stats?phone=" + encodedPhone);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(15000);
-                conn.setReadTimeout(15000);
-                if (conn.getResponseCode() != 200) return;
+                conn.setConnectTimeout(45000);
+                conn.setReadTimeout(45000);
+                int httpCode = conn.getResponseCode();
+                if (httpCode != 200) throw new Exception("HTTP " + httpCode);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder();
                 String line;
@@ -3023,22 +3032,37 @@ public class MainActivity extends Activity {
                 int rewardPerRef = res.optInt("reward_per_referral", 500);
                 String serverCode = res.optString("referral_code", "");
                 handler.post(() -> {
-                    tvReferralCount.setText(String.valueOf(count));
-                    tvReferralEarnings.setText("\u20a6" + earnings);
-                    tvReferralReward.setText("Up to \u20a6" + rewardPerRef + "/referral");
-                    // Use the authoritative code from server so it always matches
+                    if (tvReferralCount != null) tvReferralCount.setText(String.valueOf(count));
+                    if (tvReferralEarnings != null) tvReferralEarnings.setText("\u20a6" + earnings);
+                    if (tvReferralReward != null) tvReferralReward.setText("Up to \u20a6" + rewardPerRef + "/referral");
                     if (!serverCode.isEmpty()) {
                         prefs().edit().putString("referral_code", serverCode).apply();
-                        tvReferralLink.setText("Your code: " + serverCode);
-                        tvReferralLink.setOnClickListener(v -> copyReferralCodeOrWait());
+                        if (tvReferralLink != null) {
+                            tvReferralLink.setText("Your code: " + serverCode);
+                            tvReferralLink.setOnClickListener(v -> copyReferralCodeOrWait());
+                        }
                         if (onCodeReady != null) onCodeReady.run();
                     } else if (onCodeReady != null) {
                         Toast.makeText(MainActivity.this, "Could not load code. Check internet and tap again.", Toast.LENGTH_LONG).show();
                     }
                 });
             } catch (Exception e) {
-                if (onCodeReady != null) {
-                    handler.post(() -> Toast.makeText(MainActivity.this, "Could not load code. Check internet and tap again.", Toast.LENGTH_LONG).show());
+                if (attempt < 2) {
+                    handler.postDelayed(() -> loadReferralStatsWithRetry(attempt + 1, onCodeReady), 5000);
+                } else {
+                    handler.post(() -> {
+                        String cached = prefs().getString("referral_code", "");
+                        if (tvReferralLink != null) {
+                            if (!cached.isEmpty()) {
+                                tvReferralLink.setText("Your code: " + cached);
+                            } else {
+                                tvReferralLink.setText("Tap COPY to retry loading code");
+                            }
+                        }
+                        if (onCodeReady != null) {
+                            Toast.makeText(MainActivity.this, "Could not load code. Check internet and tap again.", Toast.LENGTH_LONG).show();
+                        }
+                    });
                 }
             }
         }).start();
@@ -3052,6 +3076,8 @@ public class MainActivity extends Activity {
     private void preloadEarnTab() {
         if (prefs().getString("phone", "").isEmpty()) return;
         if (earnTasksContainer == null) initEarnTab();
+        refreshReferralUI();
+        loadReferralStats();
         loadEarnTab();
     }
 

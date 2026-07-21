@@ -22,11 +22,42 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============================================
-// FIREBASE ADMIN (for push notifications) - TEMPORARILY DISABLED
+// FIREBASE ADMIN (for push notifications)
 // ============================================
-// let admin = null;
-// Firebase init disabled due to syntax error - will fix later
-console.log('Firebase push notifications temporarily disabled');
+let admin = null;
+try {
+  const firebaseAdmin = require('firebase-admin');
+  if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+    if (!firebaseAdmin.apps.length) {
+      firebaseAdmin.initializeApp({
+        credential: firebaseAdmin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID || 'acorn-data-saver-app',
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+        })
+      });
+    }
+    admin = firebaseAdmin;
+    console.log('Firebase Admin initialized');
+  } else {
+    console.log('Firebase credentials not configured - push notifications disabled');
+  }
+} catch (e) {
+  console.log('Firebase init failed:', e.message);
+}
+
+function generateReferralCode(phone) {
+  const digits = (phone || '').replace(/[^0-9]/g, '');
+  const shortDigits = digits.length > 6 ? digits.slice(-6) : digits;
+  return 'DS' + shortDigits + Math.random().toString(36).substring(2, 5).toUpperCase();
+}
+
+async function ensureReferralCode(user, phone) {
+  if (user.referral_code) return user.referral_code;
+  const code = generateReferralCode(phone);
+  await supabase.from('users').update({ referral_code: code }).eq('id', user.id);
+  return code;
+}
 
 // DataStation API config
 const DATASTATION_URL = process.env.DATASTATION_URL || 'https://datastationapi.com/api';
@@ -1779,15 +1810,39 @@ app.post('/api/notifications', async (req, res) => {
       return res.status(403).json({ error: 'Invalid admin key' });
     }
 
-    // Store in database
-    const row = {
-      title,
-      body,
-      type: type || 'general',
-      target_phone: target_phone || null
-    };
-    const { data, error } = await supabase.from('notifications').insert(row).select().single();
-    if (error) return res.status(500).json({ error: error.message });
+    // Store in database (broadcast = one row per user so inbox stays per-user)
+    let data = null;
+    if (target_phone) {
+      const row = {
+        title,
+        body,
+        type: type || 'general',
+        target_phone
+      };
+      const result = await supabase.from('notifications').insert(row).select().single();
+      if (result.error) return res.status(500).json({ error: result.error.message });
+      data = result.data;
+    } else {
+      const { data: allUsers, error: usersErr } = await supabase
+        .from('users')
+        .select('phone')
+        .not('phone', 'is', null);
+      if (usersErr) return res.status(500).json({ error: usersErr.message });
+      const rows = (allUsers || [])
+        .filter(u => u.phone)
+        .map(u => ({
+          title,
+          body,
+          type: type || 'general',
+          target_phone: u.phone
+        }));
+      if (rows.length === 0) {
+        return res.status(400).json({ error: 'No users found to notify' });
+      }
+      const result = await supabase.from('notifications').insert(rows).select();
+      if (result.error) return res.status(500).json({ error: result.error.message });
+      data = (result.data && result.data[0]) || { title, body, type: type || 'general' };
+    }
 
     // Send via FCM if Firebase is configured
     if (admin) {
@@ -1871,6 +1926,8 @@ app.get('/api/referrals/stats', async (req, res) => {
     const { data: user } = await supabase.from('users').select('id, referral_code').eq('phone', phone).single();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    const referralCode = await ensureReferralCode(user, phone);
+
     // Count ALL referrals (pending + completed); earnings only from completed
     const { data: referrals, error } = await supabase.from('referrals')
       .select('*')
@@ -1893,7 +1950,7 @@ app.get('/api/referrals/stats', async (req, res) => {
       referral_count: count,
       total_earnings: totalEarnings,
       reward_per_referral: rewardPerRef,
-      referral_code: user.referral_code || ''
+      referral_code: referralCode
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
