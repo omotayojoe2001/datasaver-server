@@ -169,6 +169,18 @@ app.post('/api/register', async (req, res) => {
       }
     }
 
+    // Welcome notification for new users (phone-targeted only)
+    try {
+      await supabase.from('notifications').insert({
+        title: 'Welcome to DataSaver',
+        body: 'Subscribe to a plan to start saving data and enjoy all features.',
+        type: 'reminder',
+        target_phone: phone
+      });
+    } catch (welcomeErr) {
+      console.log('Welcome notification failed:', welcomeErr.message);
+    }
+
     res.json({ success: true, user_id: data.id, name: data.name, phone: data.phone, email: data.email, wallet_balance: data.wallet_balance, subscription_plan: data.subscription_plan || 'none', referral_code: data.referral_code, referral_applied: referralApplied, message: 'Account created' + referralMsg });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1739,8 +1751,8 @@ app.get('/api/notifications', async (req, res) => {
 
     let query = supabase.from('notifications')
       .select('*')
-      .or(`target_phone.eq.${phone},target_phone.is.null`)
-      .order('created_at', { ascending: false }); // Newest first
+      .eq('target_phone', phone)
+      .order('created_at', { ascending: false });
 
     if (since_id && since_id !== '0') {
       query = query.gt('id', parseInt(since_id));

@@ -1583,7 +1583,7 @@ public class MainActivity extends Activity {
         prefs().edit()
             .remove("real_ad_requests").remove("real_bg_syncs").remove("real_total_dns")
             .remove("real_total_packets").remove("savings_date")
-            .remove("last_notif_id").remove("unread_notif_count")
+            .remove("last_notif_id").remove("unread_notif_count").remove("referral_code")
             .remove("last_daily_summary").remove("last_task_reminder").remove("last_upgrade_prompt")
             .apply();
         getSharedPreferences("datasaver_blocks", MODE_PRIVATE).edit().clear().apply();
@@ -2444,7 +2444,6 @@ public class MainActivity extends Activity {
                 long rAdR = prefs().getLong("real_ad_requests", 0);
                 long rBgS = prefs().getLong("real_bg_syncs", 0);
                 long instTime = prefs().getLong("install_time", 0);
-                String refCode = prefs().getString("referral_code", "");
                 prefs().edit().clear().apply();
                 prefs().edit()
                     .putLong("saved_totalRx", sRx).putLong("saved_totalTx", sTx)
@@ -2452,7 +2451,6 @@ public class MainActivity extends Activity {
                     .putLong("real_ad_bytes", rAd).putLong("real_bg_bytes", rBg)
                     .putLong("real_ad_requests", rAdR).putLong("real_bg_syncs", rBgS)
                     .putLong("install_time", instTime)
-                    .putString("referral_code", refCode)
                     .apply();
                 if (DataSaverService.isRunning) {
                     Intent i = new Intent(this, DataSaverService.class);
@@ -2964,34 +2962,47 @@ public class MainActivity extends Activity {
         tvReferralEarnings = findViewById(R.id.tvReferralEarnings);
         tvReferralReward = findViewById(R.id.tvReferralReward);
 
-        // Generate or load referral code — always use server as source of truth
+        // Always use server as source of truth for referral code
         String phone = prefs().getString("phone", "");
         if (!phone.isEmpty()) {
             tvReferralLink.setText("Loading your code...");
-            tvReferralLink.setOnClickListener(v ->
-                Toast.makeText(MainActivity.this, "Loading referral code, please wait...", Toast.LENGTH_SHORT).show());
+            tvReferralLink.setOnClickListener(v -> copyReferralCodeOrWait());
         }
 
-        findViewById(R.id.btnShareReferral).setOnClickListener(v -> {
-            if (phone == null || phone.isEmpty()) {
-                Toast.makeText(MainActivity.this, "Please login first", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            String myCode = prefs().getString("referral_code", "");
-            if (myCode.isEmpty()) {
-                Toast.makeText(MainActivity.this, "Loading referral code... Open Earn tab and try again.", Toast.LENGTH_SHORT).show();
-                loadReferralStats();
-                return;
-            }
-            copyToClipboard(myCode);
-            Toast.makeText(MainActivity.this, "Referral code copied!", Toast.LENGTH_SHORT).show();
-        });
+        findViewById(R.id.btnShareReferral).setOnClickListener(v -> copyReferralCodeOrWait());
 
-        // Load referral stats
         loadReferralStats();
     }
 
+    private void copyReferralCodeOrWait() {
+        String currentPhone = prefs().getString("phone", "");
+        if (currentPhone.isEmpty()) {
+            Toast.makeText(MainActivity.this, "Please login first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String myCode = prefs().getString("referral_code", "");
+        if (!myCode.isEmpty()) {
+            copyToClipboard(myCode);
+            Toast.makeText(MainActivity.this, "Referral code copied!", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Toast.makeText(MainActivity.this, "Loading referral code...", Toast.LENGTH_SHORT).show();
+        loadReferralStats(() -> {
+            String code = prefs().getString("referral_code", "");
+            if (!code.isEmpty()) {
+                copyToClipboard(code);
+                Toast.makeText(MainActivity.this, "Referral code copied!", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(MainActivity.this, "Could not load code. Check internet and tap again.", Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
     private void loadReferralStats() {
+        loadReferralStats(null);
+    }
+
+    private void loadReferralStats(Runnable onCodeReady) {
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) return;
         new Thread(() -> {
@@ -3019,14 +3030,16 @@ public class MainActivity extends Activity {
                     if (!serverCode.isEmpty()) {
                         prefs().edit().putString("referral_code", serverCode).apply();
                         tvReferralLink.setText("Your code: " + serverCode);
-                        tvReferralLink.setOnClickListener(v -> {
-                            copyToClipboard(serverCode);
-                            Toast.makeText(MainActivity.this, "Referral code copied!", Toast.LENGTH_SHORT).show();
-                        });
+                        tvReferralLink.setOnClickListener(v -> copyReferralCodeOrWait());
+                        if (onCodeReady != null) onCodeReady.run();
+                    } else if (onCodeReady != null) {
+                        Toast.makeText(MainActivity.this, "Could not load code. Check internet and tap again.", Toast.LENGTH_LONG).show();
                     }
                 });
             } catch (Exception e) {
-                // Silently fail — stats will show 0
+                if (onCodeReady != null) {
+                    handler.post(() -> Toast.makeText(MainActivity.this, "Could not load code. Check internet and tap again.", Toast.LENGTH_LONG).show());
+                }
             }
         }).start();
     }
