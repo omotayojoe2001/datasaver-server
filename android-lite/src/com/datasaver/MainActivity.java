@@ -3,6 +3,10 @@ package com.datasaver;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.AppOpsManager;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Notification;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -15,11 +19,14 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -54,12 +61,17 @@ public class MainActivity extends Activity {
 
     private Button btnConnect;
     private TextView tvStatus, tvUsed, tvSaved, tvSavedPct, tvAppUsageEmpty;
+        
+        // Server data for homepage display
+        private long serverTodaySaved = 0, serverWeekSaved = 0, serverMonthSaved = 0, serverAllTimeSaved = 0;
+        private long serverTodayBlocked = 0, serverWeekBlocked = 0, serverMonthBlocked = 0, serverAllTimeBlocked = 0;
     private View barUsed, barSaved;
     private LinearLayout appUsageContainer;
     private TextView navHome, navAirtime, navData, navTransactions, navEarn, navProfile;
     private ScrollView tabHome, tabAirtime, tabData, tabTransactions, tabEarn, tabProfile;
     private Handler handler = new Handler(Looper.getMainLooper());
     private boolean polling = false;
+        private boolean wasVpnRunning = false;
 
     // Airtime/Data tab
     private TextView toggleAirtime, toggleData;
@@ -116,22 +128,17 @@ public class MainActivity extends Activity {
 
     private static double bytesToNaira(long bytes) {
         if (bytes <= 0) return 0;
-        // Interpolate: find where bytes falls in the price table
-        for (int i = 0; i < DATA_PRICES.length; i++) {
-            if (bytes <= DATA_PRICES[i][0]) {
-                double pricePerByte = (double) DATA_PRICES[i][1] / DATA_PRICES[i][0];
-                return bytes * pricePerByte;
-            }
-        }
-        // Beyond 160GB, use last tier rate
-        double rate = (double) DATA_PRICES[DATA_PRICES.length - 1][1] / DATA_PRICES[DATA_PRICES.length - 1][0];
-        return bytes * rate;
+        // Value: 1 MB = ₦1
+        double nairaPerMB = 1.0;
+        double mb = bytes / (1024.0 * 1024.0);
+        return mb * nairaPerMB;
     }
 
     private static String formatNaira(double amount) {
-        if (amount < 1) return "\u20a60";
+        if (amount <= 0) return "\u20a60";
         if (amount >= 1000) return String.format("\u20a6%,.0f", amount);
-        return String.format("\u20a6%.0f", amount);
+        // Show decimals for small amounts
+        return String.format("\u20a6%.2f", amount);
     }
 
     @Override
@@ -189,11 +196,15 @@ public class MainActivity extends Activity {
         btnAirtel.setOnClickListener(v -> selectNetwork("AIRTEL"));
         btnGlo.setOnClickListener(v -> selectNetwork("GLO"));
         btn9mobile.setOnClickListener(v -> selectNetwork("9MOBILE"));
+        setupPhoneNetworkAutoDetect();
         // Set network logos (scaled to fit)
         setScaledLogo(btnMTN, R.drawable.logo_mtn, "MTN");
         setScaledLogo(btnAirtel, R.drawable.logo_airtel, "Airtel");
         setScaledLogo(btnGlo, R.drawable.logo_glo, "Glo");
         setScaledLogo(btn9mobile, R.drawable.logo_9mobile, "9mobile");
+
+        // Create notification channel for push notifications
+        createNotificationChannel();
 
         toggleAirtime.setOnClickListener(v -> setMode(false));
         toggleData.setOnClickListener(v -> setMode(true));
@@ -208,6 +219,8 @@ public class MainActivity extends Activity {
         findViewById(R.id.btnAddFunds).setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
         // Warm up server first, then fetch data (prevents timeout on cold start)
         warmUpServerThenLoad();
+        // Start foreground service for reliable background notification polling
+        NotificationPollService.start(this);
         // Ask for usage permission immediately on first launch
         if (!hasUsagePermission()) {
             new AlertDialog.Builder(this)
@@ -218,6 +231,14 @@ public class MainActivity extends Activity {
                 .setCancelable(false)
                 .show();
         }
+        
+        // Ask for notification permission (Android 13+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1001);
+            }
+        }
+        
         tvSavedValue = findViewById(R.id.tvSavedValue);
 
         // Load app usage in background (show loading state first)
@@ -307,147 +328,14 @@ public class MainActivity extends Activity {
     }
 
     private void showNotificationInbox() {
-        String phone = prefs().getString("phone", "");
-        if (phone.isEmpty()) {
-            Toast.makeText(this, "Please login to see notifications", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Build dialog with scrollable container
-        LinearLayout dialogLayout = new LinearLayout(this);
-        dialogLayout.setOrientation(LinearLayout.VERTICAL);
-        dialogLayout.setPadding(dp(16), dp(12), dp(16), dp(8));
-
-        TextView tvLoading = new TextView(this);
-        tvLoading.setText("Loading notifications...");
-        tvLoading.setTextSize(14);
-        tvLoading.setTextColor(0xFF888888);
-        tvLoading.setGravity(Gravity.CENTER);
-        tvLoading.setPadding(0, dp(20), 0, dp(20));
-        dialogLayout.addView(tvLoading);
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("Notifications")
-            .setView(dialogLayout)
-            .setNegativeButton("Close", null)
-            .setNeutralButton("Refresh", (d, w) -> {
-                d.dismiss();
-                showNotificationInbox();
-            })
-            .show();
-
-        // Fetch notifications from server
-        new Thread(() -> {
-            try {
-                URL url = new URL(SERVER_URL + "/api/notifications?phone=" + phone + "&limit=30");
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(30000);
-                conn.setReadTimeout(30000);
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
-                reader.close();
-                JSONArray arr = new JSONArray(sb.toString());
-
-                handler.post(() -> {
-                    dialogLayout.removeAllViews();
-                    if (arr.length() == 0) {
-                        TextView tvEmpty = new TextView(this);
-                        tvEmpty.setText("No notifications yet.\n\nWe'll notify you about rewards, promos, and important updates.");
-                        tvEmpty.setTextSize(14);
-                        tvEmpty.setTextColor(0xFF888888);
-                        tvEmpty.setGravity(Gravity.CENTER);
-                        tvEmpty.setPadding(0, dp(30), 0, dp(30));
-                        dialogLayout.addView(tvEmpty);
-                        return;
-                    }
-
-                    for (int i = 0; i < arr.length(); i++) {
-                        try {
-                            JSONObject notif = arr.getJSONObject(i);
-                            String title = notif.optString("title", "DataSaver");
-                            String body = notif.optString("body", "");
-                            String type = notif.optString("type", "general");
-                            String date = notif.optString("created_at", "");
-                            String dateShort = date.length() > 10 ? date.substring(0, 10) : date;
-
-                            LinearLayout card = new LinearLayout(this);
-                            card.setOrientation(LinearLayout.VERTICAL);
-                            card.setBackground(getResources().getDrawable(R.drawable.card_bg));
-                            card.setPadding(dp(14), dp(12), dp(14), dp(12));
-                            card.setElevation(dp(2));
-                            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                            lp.bottomMargin = dp(8);
-                            card.setLayoutParams(lp);
-
-                            // Icon + Title row
-                            LinearLayout row = new LinearLayout(this);
-                            row.setOrientation(LinearLayout.HORIZONTAL);
-                            row.setGravity(Gravity.CENTER_VERTICAL);
-
-                            TextView icon = new TextView(this);
-                            String emoji = "\uD83D\uDD14";
-                            if ("promo".equals(type)) emoji = "\uD83C\uDF89";
-                            else if ("reward".equals(type)) emoji = "\uD83C\uDF81";
-                            else if ("alert".equals(type)) emoji = "\u26A0\uFE0F";
-                            else if ("update".equals(type)) emoji = "\uD83D\uDCE2";
-                            icon.setText(emoji);
-                            icon.setTextSize(18);
-                            icon.setPadding(0, 0, dp(8), 0);
-                            row.addView(icon);
-
-                            TextView tvTitle = new TextView(this);
-                            tvTitle.setText(title);
-                            tvTitle.setTextSize(14);
-                            tvTitle.setTextColor(0xFF333333);
-                            tvTitle.setTypeface(null, Typeface.BOLD);
-                            tvTitle.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-                            row.addView(tvTitle);
-                            card.addView(row);
-
-                            // Body
-                            if (!body.isEmpty()) {
-                                TextView tvBody = new TextView(this);
-                                tvBody.setText(body);
-                                tvBody.setTextSize(13);
-                                tvBody.setTextColor(0xFF555555);
-                                tvBody.setPadding(dp(26), dp(4), 0, 0);
-                                card.addView(tvBody);
-                            }
-
-                            // Date
-                            TextView tvDate = new TextView(this);
-                            tvDate.setText(dateShort);
-                            tvDate.setTextSize(11);
-                            tvDate.setTextColor(0xFF999999);
-                            tvDate.setPadding(dp(26), dp(4), 0, 0);
-                            card.addView(tvDate);
-
-                            dialogLayout.addView(card);
-                        } catch (Exception e) {}
-                    }
-                });
-            } catch (Exception e) {
-                handler.post(() -> {
-                    dialogLayout.removeAllViews();
-                    TextView tvErr = new TextView(MainActivity.this);
-                    tvErr.setText("Could not load notifications.\nCheck your internet connection.");
-                    tvErr.setTextSize(14);
-                    tvErr.setTextColor(0xFFC62828);
-                    tvErr.setGravity(Gravity.CENTER);
-                    tvErr.setPadding(0, dp(20), 0, dp(20));
-                    dialogLayout.addView(tvErr);
-                });
-            }
-
-            // Reset unread count
-            DataSaverVpnService.unreadNotifCount = 0;
-            DataSaverVpnService.hasNewNotif = false;
-            prefs().edit().putInt("unread_notif_count", 0).apply();
-            handler.post(() -> updateNotifBadge());
-        }).start();
+        // Launch standalone notifications activity instead of popup
+        startActivity(new android.content.Intent(this, NotificationsActivity.class));
+        
+        // Reset unread count
+        DataSaverVpnService.unreadNotifCount = 0;
+        DataSaverVpnService.hasNewNotif = false;
+        prefs().edit().putInt("unread_notif_count", 0).apply();
+        updateNotifBadge();
     }
 
     // ==================== TIPS ====================
@@ -592,6 +480,9 @@ public class MainActivity extends Activity {
                         fetchWalletBalance(); // This also syncs name/email from server
                         refreshProfileUI();
                         loadAppUsageBackground();
+                        // Initialize and refresh referral stats
+                        if (earnTasksContainer == null) initEarnTab();
+                        loadReferralStats();
                         String name = prefs().getString("name", "");
                         String welcome = (name.isEmpty() || "null".equals(name)) ? "User" : name;
                         Toast.makeText(MainActivity.this, "Welcome back, " + welcome + "!", Toast.LENGTH_SHORT).show();
@@ -622,6 +513,11 @@ public class MainActivity extends Activity {
         paystackWebView = findViewById(R.id.paystackWebView);
 
         String phone = prefs().getString("phone", "");
+        // Migrate existing installs: record the current logged-in phone as savings owner so a post-update re-login doesn't wipe their data
+        SharedPreferences devPrefs = getSharedPreferences("datasaver_device", MODE_PRIVATE);
+        if (devPrefs.getString("savings_owner", "").isEmpty() && !phone.isEmpty()) {
+            devPrefs.edit().putString("savings_owner", phone).apply();
+        }
         if (phone.isEmpty()) {
             loginOverlay.setVisibility(View.VISIBLE);
             // New users see signup first
@@ -661,6 +557,7 @@ public class MainActivity extends Activity {
                     if (identity.contains("@")) body.put("email", identity);
                     else body.put("phone", identity);
                     body.put("pin", pin);
+                    body.put("device_id", getDeviceId());
                     OutputStream os = conn.getOutputStream();
                     os.write(body.toString().getBytes());
                     os.close();
@@ -679,6 +576,7 @@ public class MainActivity extends Activity {
                             String rName = res.isNull("name") ? "" : res.optString("name", "");
                             String rEmail = res.isNull("email") ? "" : res.optString("email", "");
                             String rPhone = res.optString("phone", "");
+                            handleUserSwitch(rPhone);
                             prefs().edit()
                                 .putString("user_id", res.optString("user_id"))
                                 .putString("name", rName)
@@ -691,10 +589,8 @@ public class MainActivity extends Activity {
                             findViewById(R.id.bottomNav).setVisibility(View.VISIBLE);
                             refreshProfileUI();
                             fetchWalletBalance();
-                            // If name/email missing from server, push from signup data
-                            if ((rName.isEmpty() || "null".equals(rName)) && !identity.contains("@")) {
-                                // Logged in with phone, name might be missing
-                            }
+                            preloadEarnTab();
+                            loadReferralStats();
                             String welcome = (rName.isEmpty() || "null".equals(rName)) ? "User" : rName;
                             Toast.makeText(this, "Welcome back, " + welcome + "!", Toast.LENGTH_SHORT).show();
                         } else {
@@ -717,7 +613,9 @@ public class MainActivity extends Activity {
             String ph = ((EditText) findViewById(R.id.signupPhone)).getText().toString().trim();
             String email = ((EditText) findViewById(R.id.signupEmail)).getText().toString().trim();
             String pin = ((EditText) findViewById(R.id.signupPin)).getText().toString().trim();
+            String enteredRef = ((EditText) findViewById(R.id.signupReferral)).getText().toString().trim().toUpperCase();
             if (name.isEmpty()) { showAuthError(tvLoginStatus, "Enter your name"); return; }
+            if (ph.length() < 10) { showAuthError(tvLoginStatus, "Enter a valid phone number"); return; }
             if (email.isEmpty() || !email.contains("@")) { showAuthError(tvLoginStatus, "Enter a valid email address"); return; }
             if (pin.length() < 4) { showAuthError(tvLoginStatus, "Create a 4-digit PIN"); return; }
 
@@ -738,11 +636,12 @@ public class MainActivity extends Activity {
                     body.put("email", email);
                     body.put("pin", pin);
                     body.put("name", name);
-                    if (!ph.isEmpty()) body.put("phone", ph);
-                    // Include referral code if user came from a referral link
-                    String refCode = getIntent() != null ? getIntent().getStringExtra("referral_code") : null;
-                    if (refCode == null) refCode = prefs().getString("pending_referral_code", "");
-                    if (!refCode.isEmpty()) body.put("referral_code", refCode);
+                    body.put("phone", ph);
+                    // Include referral code: manually entered field takes priority, then deep-link code
+                    String refCode = enteredRef;
+                    if (refCode.isEmpty()) refCode = getIntent() != null ? getIntent().getStringExtra("referral_code") : null;
+                    if (refCode == null || refCode.isEmpty()) refCode = prefs().getString("pending_referral_code", "");
+                    if (refCode != null && !refCode.isEmpty()) body.put("referral_code", refCode.trim().toUpperCase());
                     OutputStream os = conn.getOutputStream();
                     os.write(body.toString().getBytes());
                     os.close();
@@ -758,6 +657,7 @@ public class MainActivity extends Activity {
                         ((Button) v).setEnabled(true);
                         ((Button) v).setText("CREATE ACCOUNT");
                         if (code < 400 && res.optBoolean("success")) {
+                            handleUserSwitch(ph);
                             prefs().edit()
                                 .putString("user_id", res.optString("user_id"))
                                 .putString("name", name)
@@ -772,7 +672,17 @@ public class MainActivity extends Activity {
                             findViewById(R.id.bottomNav).setVisibility(View.VISIBLE);
                             refreshProfileUI();
                             fetchWalletBalance();
-                            Toast.makeText(this, "Welcome, " + name + "!", Toast.LENGTH_SHORT).show();
+                            preloadEarnTab();
+                            loadReferralStats();
+                            String regMsg = res.optString("message", "Account created");
+                            if (res.optBoolean("referral_applied")) {
+                                Toast.makeText(this, regMsg, Toast.LENGTH_LONG).show();
+                            } else {
+                                Toast.makeText(this, "Welcome, " + name + "!", Toast.LENGTH_SHORT).show();
+                                if (regMsg.contains("referral")) {
+                                    Toast.makeText(this, regMsg, Toast.LENGTH_LONG).show();
+                                }
+                            }
                         } else {
                             showAuthError(tvLoginStatus, res.optString("error", "Registration failed"));
                         }
@@ -857,7 +767,10 @@ public class MainActivity extends Activity {
                 }
             }
             // Server is awake (or we gave up after 5 tries) — now load real data
-            handler.post(() -> fetchWalletBalance());
+            handler.post(() -> {
+                fetchWalletBalance();
+                preloadEarnTab();
+            });
         }).start();
     }
 
@@ -966,6 +879,59 @@ public class MainActivity extends Activity {
             selected.setBackgroundColor(0xFFE3F2FD);
         }
         if (isDataMode) fetchAndLoadPlans();
+    }
+
+    private String getDeviceId() {
+        SharedPreferences dev = getSharedPreferences("datasaver_device", MODE_PRIVATE);
+        String saved = dev.getString("device_id", "");
+        if (!saved.isEmpty()) return saved;
+        String id = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+        if (id == null || id.isEmpty()) id = "unknown-" + System.currentTimeMillis();
+        dev.edit().putString("device_id", id).apply();
+        return id;
+    }
+
+    private void setupPhoneNetworkAutoDetect() {
+        etPhone.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                String network = detectNetworkFromPhone(s.toString());
+                if (network != null) selectNetwork(network);
+            }
+            public void afterTextChanged(Editable s) {}
+        });
+    }
+
+    private String normalizeNigerianPhone(String input) {
+        if (input == null) return "";
+        String digits = input.replaceAll("[^0-9]", "");
+        if (digits.startsWith("234") && digits.length() >= 13) {
+            digits = "0" + digits.substring(3);
+        } else if (digits.length() == 10 && digits.charAt(0) != '0') {
+            digits = "0" + digits;
+        }
+        return digits;
+    }
+
+    private String detectNetworkFromPhone(String input) {
+        String phone = normalizeNigerianPhone(input);
+        if (phone.length() >= 5) {
+            String prefix5 = phone.substring(0, 5);
+            if ("07025".equals(prefix5) || "07026".equals(prefix5)) return "MTN";
+        }
+        if (phone.length() < 4) return null;
+
+        String prefix = phone.substring(0, 4);
+        String[] mtn = {"0803", "0806", "0703", "0706", "0810", "0813", "0814", "0816", "0903", "0906", "0913", "0916", "0704"};
+        String[] airtel = {"0802", "0808", "0708", "0701", "0812", "0901", "0902", "0904", "0907", "0912"};
+        String[] glo = {"0805", "0807", "0705", "0811", "0815", "0905", "0915"};
+        String[] nineMobile = {"0809", "0817", "0818", "0908", "0909"};
+
+        for (String p : mtn) if (prefix.equals(p)) return "MTN";
+        for (String p : airtel) if (prefix.equals(p)) return "AIRTEL";
+        for (String p : glo) if (prefix.equals(p)) return "GLO";
+        for (String p : nineMobile) if (prefix.equals(p)) return "9MOBILE";
+        return null;
     }
 
     private void setScaledLogo(TextView btn, int drawableRes, String label) {
@@ -1211,16 +1177,36 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Select a network", Toast.LENGTH_SHORT).show();
             return;
         }
+        if (isDataMode && selectedDataPlanIndex < 0) {
+            Toast.makeText(this, "Select a data plan", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isDataMode && etAirtimeAmount.getText().toString().trim().isEmpty()) {
+            Toast.makeText(this, "Select or enter an amount", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String detected = detectNetworkFromPhone(phone);
+        if (detected != null && !detected.equals(selectedNetwork)) {
+            showNetworkMismatchDialog(phone, detected);
+            return;
+        }
+        proceedWithBuy(phone);
+    }
+
+    private String networkDisplayName(String network) {
+        if ("MTN".equals(network)) return "MTN";
+        if ("AIRTEL".equals(network)) return "Airtel";
+        if ("GLO".equals(network)) return "Glo";
+        if ("9MOBILE".equals(network)) return "9mobile";
+        return network;
+    }
+
+    private void proceedWithBuy(String phone) {
         btnBuy.setEnabled(false);
         btnBuy.setText("Processing...");
 
         if (isDataMode) {
-            if (selectedDataPlanIndex < 0) {
-                Toast.makeText(this, "Select a data plan", Toast.LENGTH_SHORT).show();
-                btnBuy.setEnabled(true);
-                btnBuy.setText("BUY DATA");
-                return;
-            }
             try {
                 int dataId = fetchedPlans.get(selectedDataPlanIndex).getInt("data_id");
                 callApi("/api/buy-data", phone, selectedNetwork, String.valueOf(dataId), true);
@@ -1230,12 +1216,6 @@ public class MainActivity extends Activity {
             }
         } else {
             String amt = etAirtimeAmount.getText().toString().trim();
-            if (amt.isEmpty()) {
-                Toast.makeText(this, "Select or enter an amount", Toast.LENGTH_SHORT).show();
-                btnBuy.setEnabled(true);
-                btnBuy.setText("BUY AIRTIME");
-                return;
-            }
             callApi("/api/buy-airtime", phone, selectedNetwork, amt, false);
         }
     }
@@ -1413,7 +1393,10 @@ public class MainActivity extends Activity {
             .setView(layout)
             .setPositiveButton("Pay with Paystack", (d, w) -> {
                 String amt = etAmt.getText().toString().trim();
-                if (amt.isEmpty() || Integer.parseInt(amt) < 100) { Toast.makeText(this, "Minimum amount is \u20a6100", Toast.LENGTH_SHORT).show(); return; }
+                if (amt.isEmpty() || Integer.parseInt(amt) < 100) {
+                    Toast.makeText(this, "Minimum amount is \u20a6100", Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 initPaystackPayment(Integer.parseInt(amt));
             })
             .setNegativeButton("Cancel", null)
@@ -1595,6 +1578,38 @@ public class MainActivity extends Activity {
         if (tab == 2) loadSavingsHistory();
     }
 
+    private void clearUserScopedData() {
+        // Reset device-level counters/savings so a different account on this device does not inherit the previous user's data
+        prefs().edit()
+            .remove("real_ad_requests").remove("real_bg_syncs").remove("real_total_dns")
+            .remove("real_total_packets").remove("savings_date")
+            .remove("last_notif_id").remove("unread_notif_count")
+            .remove("last_daily_summary").remove("last_task_reminder").remove("last_upgrade_prompt")
+            .apply();
+        getSharedPreferences("datasaver_blocks", MODE_PRIVATE).edit().clear().apply();
+        try {
+            DataSaverVpnService.blockedAdRequests.set(0);
+            DataSaverVpnService.blockedBgSyncs.set(0);
+            DataSaverVpnService.totalDnsQueries.set(0);
+            DataSaverVpnService.totalPacketsProcessed.set(0);
+            DataSaverVpnService.perAppBlockedCount.clear();
+            DataSaverVpnService.unreadNotifCount = 0;
+        } catch (Exception e) {}
+    }
+
+    // Resets device-local savings ONLY when a genuinely different account signs in on this phone.
+    // Uses a persistent "savings_owner" marker (in a separate prefs file that logout never clears),
+    // so the primary owner logging back in keeps their own savings.
+    private void handleUserSwitch(String newPhone) {
+        if (newPhone == null) newPhone = "";
+        SharedPreferences dev = getSharedPreferences("datasaver_device", MODE_PRIVATE);
+        String owner = dev.getString("savings_owner", "");
+        if (!newPhone.equals(owner)) {
+            clearUserScopedData();
+            dev.edit().putString("savings_owner", newPhone).apply();
+        }
+    }
+
     private void showBlockedAdsLog(LinearLayout container) {
         showBlockedAppsForDate(new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(new java.util.Date()));
     }
@@ -1640,10 +1655,17 @@ public class MainActivity extends Activity {
  JSONObject res = new JSONObject(sb.toString());
  long totalSaved = res.optLong("total_saved", 0);
  long totalBlocked = res.optLong("total_blocked", 0);
+ double totalSavedNaira = res.optDouble("total_saved_naira", 0);
  JSONObject todayObj = res.optJSONObject("today");
  JSONObject weekObj = res.optJSONObject("week");
  JSONObject monthObj = res.optJSONObject("month");
  JSONArray history = res.optJSONArray("history");
+ // Store server data for homepage display
+ if (todayObj != null) { serverTodaySaved = todayObj.optLong("saved", 0); serverTodayBlocked = todayObj.optLong("blocked", 0); }
+ if (weekObj != null) { serverWeekSaved = weekObj.optLong("saved", 0); serverWeekBlocked = weekObj.optLong("blocked", 0); }
+ if (monthObj != null) { serverMonthSaved = monthObj.optLong("saved", 0); serverMonthBlocked = monthObj.optLong("blocked", 0); }
+ serverAllTimeSaved = totalSaved;
+ serverAllTimeBlocked = totalBlocked;
  handler.post(() -> {
  TextView tvToday = findViewById(R.id.tvSavingsToday);
  TextView tvWeek = findViewById(R.id.tvSavingsWeek);
@@ -1653,8 +1675,8 @@ public class MainActivity extends Activity {
                     if (tvToday != null && todayObj != null) tvToday.setText(formatBytes(todayObj.optLong("saved", 0)));
                     if (tvWeek != null && weekObj != null) tvWeek.setText(formatBytes(weekObj.optLong("saved", 0)));
                     if (tvMonth != null && monthObj != null) tvMonth.setText(formatBytes(monthObj.optLong("saved", 0)));
- if (tvAll != null) tvAll.setText(formatBytes(totalSaved));
- if (tvAllB != null) tvAllB.setText(totalBlocked + " requests blocked");
+ if (tvAll != null) tvAll.setText(formatBytes(totalSaved) + " (₦" + String.format("%.2f", totalSavedNaira) + ")");
+ if (tvAllB != null) tvAllB.setText(String.format("%,d", totalBlocked) + " requests blocked ≈ " + formatBytes(totalSaved));
  savingsHistoryContainer.removeAllViews();
  if (history != null && history.length() > 0) {
  tvNoSavings.setVisibility(View.GONE);
@@ -1664,6 +1686,7 @@ public class MainActivity extends Activity {
  final String date = day.optString("date", "");
                                 long saved = day.optLong("saved_bytes", 0);
  long blocked = day.optLong("blocked_requests", 0);
+ double savedNaira = day.optDouble("saved_naira", 0);
  if (saved == 0 && blocked == 0) continue;
  LinearLayout row = new LinearLayout(MainActivity.this);
  row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1677,15 +1700,12 @@ public class MainActivity extends Activity {
  tvDate.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
  row.addView(tvDate);
  LinearLayout rc = new LinearLayout(MainActivity.this); rc.setOrientation(LinearLayout.VERTICAL); rc.setGravity(Gravity.END);
- TextView tvS = new TextView(MainActivity.this); tvS.setText(formatBytes(saved)); tvS.setTextSize(14); tvS.setTextColor(0xFF43A047); tvS.setTypeface(null, Typeface.BOLD); rc.addView(tvS);
- TextView tvB = new TextView(MainActivity.this); tvB.setText(blocked + " blocked"); tvB.setTextSize(11); tvB.setTextColor(0xFF888888); rc.addView(tvB);
-  final String clickDate = date; row.setOnClickListener(v -> showBlockedAppsForDate(clickDate)); row.addView(rc); savingsHistoryContainer.addView(row);
+ TextView tvS = new TextView(MainActivity.this); tvS.setText(formatBytes(saved) + " (₦" + String.format("%.2f", savedNaira) + ")"); tvS.setTextSize(14); tvS.setTextColor(0xFF43A047); tvS.setTypeface(null, Typeface.BOLD); rc.addView(tvS);
+ TextView tvB = new TextView(MainActivity.this); tvB.setText(String.format("%,d", blocked) + " blocked"); tvB.setTextSize(11); tvB.setTextColor(0xFF888888); rc.addView(tvB);
+ row.addView(rc); savingsHistoryContainer.addView(row);
  } catch (Exception e) {}
  }
                     } else { tvNoSavings.setText("No savings data yet"); tvNoSavings.setVisibility(View.VISIBLE); }
-                    showBlockedAdsLog(savingsHistoryContainer);
-                    // Show blocked ads log from VPN
-                    showBlockedAdsLog(savingsHistoryContainer);
  });
  } catch (Exception e) {
                 // Fallback to local data
@@ -1877,8 +1897,12 @@ public class MainActivity extends Activity {
         long totalBlocked = DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get();
         long totalDns = DataSaverVpnService.totalDnsQueries.get();
         tvHistorySaved.setText(totalBlocked + " requests blocked");
-        double blockRate = totalDns > 0 ? (totalBlocked * 100.0 / totalDns) : 0;
-        tvHistorySavedPct.setText(String.format("%.1f%% block rate", blockRate));
+        // Show actual data efficiency
+        double savedPct = 0;
+        if (totalUsed > 0 || totalSaved > 0) {
+            savedPct = (totalSaved * 100.0) / (totalUsed + totalSaved);
+        }
+        tvHistorySavedPct.setText(String.format("%.1f%% saved", savedPct));
     }
 
     private void addUsageCard(String appName, String amount, long total, long saved) {
@@ -1936,7 +1960,7 @@ public class MainActivity extends Activity {
     // ==================== PROFILE TAB ====================
 
     private TextView tvProfileName, tvProfilePhone, tvPushNotif, tvDailyAlerts;
-    private TextView tvImageQuality, tvWifiCompress, tvServerAddr, tvAppVersion, profilePhoto;
+    private TextView tvServerAddr, tvAppVersion, profilePhoto;
 
     private SharedPreferences prefs() { return getSharedPreferences("datasaver", MODE_PRIVATE); }
 
@@ -1945,14 +1969,15 @@ public class MainActivity extends Activity {
         tvProfilePhone = findViewById(R.id.tvProfilePhone);
         tvPushNotif = findViewById(R.id.tvPushNotif);
         tvDailyAlerts = findViewById(R.id.tvDailyAlerts);
-        tvImageQuality = findViewById(R.id.tvImageQuality);
-        tvWifiCompress = findViewById(R.id.tvWifiCompress);
         tvServerAddr = findViewById(R.id.tvServerAddr);
         tvAppVersion = findViewById(R.id.tvAppVersion);
         profilePhoto = findViewById(R.id.profilePhoto);
 
         // Load saved prefs
         refreshProfileUI();
+        
+        // Load Activity Log
+        loadActivityLog();
 
         profilePhoto.setOnClickListener(v -> {
             Intent pick = new Intent(Intent.ACTION_PICK);
@@ -1966,8 +1991,6 @@ public class MainActivity extends Activity {
         findViewById(R.id.btnProfileAddFunds).setOnClickListener(v -> showTopUpPrompt("Add money to your wallet"));
         findViewById(R.id.rowPushNotif).setOnClickListener(v -> togglePref("push_notif", tvPushNotif));
         findViewById(R.id.rowDailyAlerts).setOnClickListener(v -> togglePref("daily_alerts", tvDailyAlerts));
-        findViewById(R.id.rowImageQuality).setOnClickListener(v -> cycleImageQuality());
-        findViewById(R.id.rowWifiCompress).setOnClickListener(v -> togglePref("wifi_compress", tvWifiCompress));
         findViewById(R.id.rowPrivacy).setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://datasaver-server.onrender.com/privacy"))));
         findViewById(R.id.btnLogout).setOnClickListener(v -> logout());
 
@@ -1980,6 +2003,57 @@ public class MainActivity extends Activity {
         if (rowBgGuard != null) rowBgGuard.setOnClickListener(v -> togglePref("bg_block_enabled", findViewById(R.id.tvBgGuard)));
     }
 
+    private void loadActivityLog() {
+        TextView tvActivityLog = findViewById(R.id.tvActivityLog);
+        if (tvActivityLog == null) return;
+        
+        String phone = prefs().getString("phone", "");
+        android.util.Log.i("DataSaver", "Loading activity log for phone: '" + phone + "'");
+        if (phone.isEmpty()) {
+            tvActivityLog.setText("Login to see activity");
+            return;
+        }
+        
+        tvActivityLog.setText("Loading...");
+        
+        new Thread(() -> {
+            try {
+                java.net.URL url = new java.net.URL(SERVER_URL + "/api/savings/activity/" + phone);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
+                if (conn.getResponseCode() == 200) {
+                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder(); String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+                    org.json.JSONObject res = new org.json.JSONObject(sb.toString());
+                    org.json.JSONArray activity = res.optJSONArray("activity");
+                    
+                    StringBuilder logText = new StringBuilder();
+                    if (activity != null && activity.length() > 0) {
+                        for (int i = 0; i < Math.min(activity.length(), 20); i++) {
+                            org.json.JSONObject log = activity.getJSONObject(i);
+                            String time = log.optString("created_at", "");
+                            if (time.length() > 16) time = time.substring(0, 16).replace("T", " ");
+                            long saved = log.optLong("saved_bytes", 0);
+                            long blocked = log.optLong("blocked_requests", 0);
+                            double naira = log.optDouble("saved_naira", 0);
+                            logText.append(time).append(" - ").append(formatBytes(saved)).append(" saved (").append(formatBytes(blocked * 5 * 1024)).append("), ₦").append(String.format("%.2f", naira)).append("\n");
+                        }
+                    } else {
+                        logText.append("No activity yet. Turn on DataSaver to start logging.");
+                    }
+                    final String displayText = logText.toString();
+                    handler.post(() -> tvActivityLog.setText(displayText));
+                }
+            } catch (Exception e) {
+                handler.post(() -> tvActivityLog.setText("Error loading activity: " + e.getMessage()));
+            }
+        }).start();
+    }
+    
     private void refreshProfileUI() {
         SharedPreferences sp = prefs();
         String name = sp.getString("name", "");
@@ -1993,12 +2067,6 @@ public class MainActivity extends Activity {
         tvPushNotif.setTextColor(sp.getBoolean("push_notif", true) ? 0xFF43A047 : 0xFFC62828);
         tvDailyAlerts.setText(sp.getBoolean("daily_alerts", true) ? "ON" : "OFF");
         tvDailyAlerts.setTextColor(sp.getBoolean("daily_alerts", true) ? 0xFF43A047 : 0xFFC62828);
-
-        String quality = sp.getString("image_quality", "Medium");
-        tvImageQuality.setText(quality + " >");
-
-        tvWifiCompress.setText(sp.getBoolean("wifi_compress", false) ? "ON" : "OFF");
-        tvWifiCompress.setTextColor(sp.getBoolean("wifi_compress", false) ? 0xFF43A047 : 0xFFC62828);
 
         // Background Guard status
         TextView tvBgGuard = findViewById(R.id.tvBgGuard);
@@ -2038,11 +2106,11 @@ public class MainActivity extends Activity {
     }
 
     private void resetAllSavingsData() {
-        new AlertDialog.Builder(this)
-            .setTitle("Reset Savings Data")
-            .setMessage("This will clear all savings counters, the free plan cap, and restart fresh. Use this for testing only.")
-            .setPositiveButton("Reset Everything", (d, w) -> {
-                // Clear all savings counters
+        showAppDialog(
+            "Reset Savings Data",
+            "This will clear all savings counters, the free plan cap, and restart fresh. Use this for testing only.",
+            "Reset Everything",
+            () -> {
                 prefs().edit()
                     .putLong("real_ad_bytes", 0)
                     .putLong("real_bg_bytes", 0)
@@ -2056,26 +2124,23 @@ public class MainActivity extends Activity {
                     .putBoolean("cap_popup_shown", false)
                     .remove("saved_appData")
                     .apply();
-                // Reset live counters
                 DataSaverVpnService.blockedAdRequests.set(0);
                 DataSaverVpnService.blockedBgSyncs.set(0);
                 DataSaverVpnService.totalDnsQueries.set(0);
                 DataSaverVpnService.totalPacketsProcessed.set(0);
                 DataSaverVpnService.perAppBlockedCount.clear();
-                // Reset cap popup flag
                 capPopupShown = false;
-                // Clear app usage
                 DataSaverService.appDataUsage.clear();
                 DataSaverService.totalSavedBytes = 0;
                 DataSaverService.savedPercent = 0;
-                // Refresh UI
                 updateSummary();
                 updateAppCards();
                 hideUpgradeBanner();
                 Toast.makeText(this, "All savings data reset. Fresh start!", Toast.LENGTH_LONG).show();
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
+            },
+            "Cancel",
+            null
+        );
     }
 
     private void togglePref(String key, TextView tv) {
@@ -2108,17 +2173,6 @@ public class MainActivity extends Activity {
                 handler.post(() -> tvPW.setText("\u20a60"));
             }
         }).start();
-    }
-
-    private void cycleImageQuality() {
-        String[] opts = {"Low", "Medium", "High"};
-        String current = prefs().getString("image_quality", "Medium");
-        int idx = 0;
-        for (int i = 0; i < opts.length; i++) if (opts[i].equals(current)) idx = i;
-        String next = opts[(idx + 1) % opts.length];
-        prefs().edit().putString("image_quality", next).apply();
-        tvImageQuality.setText(next + " >");
-        Toast.makeText(this, "Image quality: " + next, Toast.LENGTH_SHORT).show();
     }
 
     private void showBypassAppsDialog() {
@@ -2223,7 +2277,6 @@ public class MainActivity extends Activity {
                             }
                         }
                         prefs().edit().putString("bypass_apps", sb.toString()).apply();
-                        // Restart VPN immediately to apply new protected apps
                         if (DataSaverVpnService.isVpnRunning) {
                             Intent stopIntent = new Intent(this, DataSaverVpnService.class);
                             stopIntent.setAction("STOP");
@@ -2278,7 +2331,6 @@ public class MainActivity extends Activity {
                 String newName = etName.getText().toString().trim();
                 String newPhone = etPh.getText().toString().trim();
                 String newEmail = etEmail.getText().toString().trim();
-                // Use the ORIGINAL phone to find the record on server
                 String originalPhone = safeGet("phone");
                 sp.edit()
                     .putString("name", newName)
@@ -2287,7 +2339,6 @@ public class MainActivity extends Activity {
                     .apply();
                 refreshProfileUI();
                 Toast.makeText(this, "Saving to server...", Toast.LENGTH_SHORT).show();
-                // Push to server using ORIGINAL phone as lookup key
                 new Thread(() -> {
                     try {
                         URL url = new URL(SERVER_URL + "/api/user/update");
@@ -2379,11 +2430,11 @@ public class MainActivity extends Activity {
     }
 
     private void logout() {
-        new AlertDialog.Builder(this)
-            .setTitle("Log Out")
-            .setMessage("Are you sure you want to log out?")
-            .setPositiveButton("Log Out", (d, w) -> {
-                // Keep ALL saved stats including real VPN savings
+        showAppDialog(
+            "Log Out",
+            "Are you sure you want to log out?",
+            "Log Out",
+            () -> {
                 long sRx = prefs().getLong("saved_totalRx", 0);
                 long sTx = prefs().getLong("saved_totalTx", 0);
                 long sSaved = prefs().getLong("saved_totalSaved", 0);
@@ -2393,6 +2444,7 @@ public class MainActivity extends Activity {
                 long rAdR = prefs().getLong("real_ad_requests", 0);
                 long rBgS = prefs().getLong("real_bg_syncs", 0);
                 long instTime = prefs().getLong("install_time", 0);
+                String refCode = prefs().getString("referral_code", "");
                 prefs().edit().clear().apply();
                 prefs().edit()
                     .putLong("saved_totalRx", sRx).putLong("saved_totalTx", sTx)
@@ -2400,6 +2452,7 @@ public class MainActivity extends Activity {
                     .putLong("real_ad_bytes", rAd).putLong("real_bg_bytes", rBg)
                     .putLong("real_ad_requests", rAdR).putLong("real_bg_syncs", rBgS)
                     .putLong("install_time", instTime)
+                    .putString("referral_code", refCode)
                     .apply();
                 if (DataSaverService.isRunning) {
                     Intent i = new Intent(this, DataSaverService.class);
@@ -2413,12 +2466,12 @@ public class MainActivity extends Activity {
                 loginOverlay.setVisibility(View.VISIBLE);
                 loginOverlay.bringToFront();
                 findViewById(R.id.bottomNav).setVisibility(View.GONE);
-                // Reset to login tab
                 switchAuthTab(false, (TextView) findViewById(R.id.tabLogin), (TextView) findViewById(R.id.tabSignup));
                 Toast.makeText(this, "Logged out", Toast.LENGTH_SHORT).show();
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
+            },
+            "Cancel",
+            null
+        );
     }
 
     private void loadProfilePhoto() {
@@ -2474,7 +2527,14 @@ public class MainActivity extends Activity {
             if (resultCode == RESULT_OK) {
                 startServices();
             } else {
-                new AlertDialog.Builder(this).setTitle("VPN Permission Needed").setMessage("Acorn Datasaver needs VPN permission to block ads and save your data.\n\nTap OK and then tap ALLOW on the next screen.").setPositiveButton("Try Again", (d, w) -> toggle()).setNegativeButton("Cancel", null).show();
+                showAppDialog(
+                    "VPN Permission Needed",
+                    "Acorn Datasaver needs VPN permission to block ads and save your data.\n\nTap Try Again and then tap ALLOW on the next screen.",
+                    "Try Again",
+                    () -> toggle(),
+                    "Cancel",
+                    null
+                );
             }
             return;
         }
@@ -2541,15 +2601,60 @@ public class MainActivity extends Activity {
 
     private String currentPlan = "none";
 
+    // Subscription pricing fetched from admin panel (/api/subscription-plans). Defaults used until fetched.
+    private int premiumPrice = 500, premiumDuration = 7;
+    private int professionalPrice = 1500, professionalDuration = 30;
+    private int enterprisePrice = 5000, enterpriseDuration = 30;
+
+    private int planPrice(String id) {
+        if ("premium".equals(id)) return premiumPrice;
+        if ("professional".equals(id)) return professionalPrice;
+        return enterprisePrice;
+    }
+    private int planDuration(String id) {
+        if ("premium".equals(id)) return premiumDuration;
+        if ("professional".equals(id)) return professionalDuration;
+        return enterpriseDuration;
+    }
+    private String formatNaira(int a) { return "\u20a6" + String.format("%,d", a); }
+    private String periodLabel(int days) {
+        if (days == 7) return "/week";
+        if (days == 30) return "/month";
+        if (days == 90) return "/3 months";
+        if (days % 30 == 0) return "/" + (days / 30) + " months";
+        if (days % 7 == 0) return "/" + (days / 7) + " weeks";
+        return "/" + days + " days";
+    }
+
     private void loadSubscriptionPlans() {
         LinearLayout container = findViewById(R.id.subsPlansContainer);
         container.removeAllViews();
         TextView header = findViewById(R.id.tvCurrentPlanHeader);
 
-        // Fetch current plan from server
         String phone = prefs().getString("phone", "");
-        if (!phone.isEmpty()) {
-            new Thread(() -> {
+        new Thread(() -> {
+            // 1. Fetch pricing from admin panel
+            try {
+                URL purl = new URL(SERVER_URL + "/api/subscription-plans");
+                HttpURLConnection pconn = (HttpURLConnection) purl.openConnection();
+                pconn.setConnectTimeout(45000);
+                pconn.setReadTimeout(45000);
+                BufferedReader preader = new BufferedReader(new InputStreamReader(pconn.getInputStream()));
+                StringBuilder psb = new StringBuilder();
+                String pline;
+                while ((pline = preader.readLine()) != null) psb.append(pline);
+                preader.close();
+                JSONObject pres = new JSONObject(psb.toString());
+                JSONObject prem = pres.optJSONObject("premium");
+                JSONObject prof = pres.optJSONObject("professional");
+                JSONObject ent = pres.optJSONObject("enterprise");
+                if (prem != null) { premiumPrice = prem.optInt("price", premiumPrice); premiumDuration = prem.optInt("duration", premiumDuration); }
+                if (prof != null) { professionalPrice = prof.optInt("price", professionalPrice); professionalDuration = prof.optInt("duration", professionalDuration); }
+                if (ent != null) { enterprisePrice = ent.optInt("price", enterprisePrice); enterpriseDuration = ent.optInt("duration", enterpriseDuration); }
+            } catch (Exception e) { /* keep defaults */ }
+
+            // 2. Fetch current plan (if logged in)
+            if (!phone.isEmpty()) {
                 try {
                     URL url = new URL(SERVER_URL + "/api/subscription/" + phone);
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -2576,10 +2681,10 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {
                     handler.post(() -> buildPlanCards(container));
                 }
-            }).start();
-        } else {
-            buildPlanCards(container);
-        }
+            } else {
+                handler.post(() -> buildPlanCards(container));
+            }
+        }).start();
     }
 
     private void buildPlanCards(LinearLayout container) {
@@ -2595,7 +2700,7 @@ public class MainActivity extends Activity {
              "Access to premium-only tasks",
              "Detailed app-by-app analytics",
              "Max 1 device"},
-            {"professional", "Professional", "\u20a61,500", "/month", "2",
+            {"professional", "Professional", "\u20a61,500", "/month", "1",
              "Ad blocking: UNLIMITED",
              "Saves 30-40% of your data",
              "No savings cap \u2014 save forever",
@@ -2604,8 +2709,8 @@ public class MainActivity extends Activity {
              "Access to professional-only tasks",
              "Aggressive image compression",
              "Full savings history and charts",
-             "Max 2 devices"},
-            {"enterprise", "Enterprise", "\u20a65,000", "/month", "5",
+             "Max 1 device"},
+            {"enterprise", "Enterprise", "\u20a65,000", "/month", "4",
              "Ad blocking: UNLIMITED",
              "Saves 40-50% of your data",
              "No savings cap \u2014 save forever",
@@ -2615,14 +2720,14 @@ public class MainActivity extends Activity {
              "Maximum compression on all content",
              "Priority server \u2014 fastest speeds",
              "24/7 priority support",
-             "Max 5 devices"}
+             "Max 4 devices"}
         };
 
         for (String[] p : plans) {
             String planId = p[0];
             String planName = p[1];
-            String price = p[2];
-            String period = p[3];
+            String price = formatNaira(planPrice(planId));
+            String period = periodLabel(planDuration(planId));
             String deviceLimit = p[4];
             boolean isCurrent = planId.equals(currentPlan);
 
@@ -2639,7 +2744,7 @@ public class MainActivity extends Activity {
             // Badge row
             String badge = null;
             int badgeColor = 0xFF999999;
-            if ("premium".equals(planId)) { badge = "\uD83D\uDD25 PROMO: \u20a6500 for 3 months!"; badgeColor = 0xFFC62828; }
+            if ("premium".equals(planId)) { badge = "POPULAR"; badgeColor = 0xFFC62828; }
             else if ("professional".equals(planId)) { badge = "BEST VALUE"; badgeColor = 0xFF2E7D32; }
             else if ("enterprise".equals(planId))   { badge = "MAXIMUM SAVINGS"; badgeColor = 0xFF1565C0; }
             if (badge != null) {
@@ -2663,32 +2768,16 @@ public class MainActivity extends Activity {
             tvName.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             titleRow.addView(tvName);
 
-            // Price column (promo for premium)
+            // Price column
             LinearLayout priceCol = new LinearLayout(this);
             priceCol.setOrientation(LinearLayout.VERTICAL);
             priceCol.setGravity(Gravity.RIGHT);
-            if ("premium".equals(planId)) {
-                // Strikethrough original price
-                TextView tvOld = new TextView(this);
-                tvOld.setText("\u20a6500/week");
-                tvOld.setTextSize(12);
-                tvOld.setTextColor(0xFF999999);
-                tvOld.setPaintFlags(tvOld.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
-                priceCol.addView(tvOld);
-                TextView tvPromo = new TextView(this);
-                tvPromo.setText("\u20a6500/3 months");
-                tvPromo.setTextSize(14);
-                tvPromo.setTypeface(null, Typeface.BOLD);
-                tvPromo.setTextColor(0xFFC62828);
-                priceCol.addView(tvPromo);
-            } else {
-                TextView tvPrice = new TextView(this);
-                tvPrice.setText(price + period);
-                tvPrice.setTextSize(18);
-                tvPrice.setTypeface(null, Typeface.BOLD);
-                tvPrice.setTextColor(0xFFC62828);
-                priceCol.addView(tvPrice);
-            }
+            TextView tvPrice = new TextView(this);
+            tvPrice.setText(price + period);
+            tvPrice.setTextSize(18);
+            tvPrice.setTypeface(null, Typeface.BOLD);
+            tvPrice.setTextColor(0xFFC62828);
+            priceCol.addView(tvPrice);
             titleRow.addView(priceCol);
             card.addView(titleRow);
 
@@ -2738,7 +2827,7 @@ public class MainActivity extends Activity {
                 btn.setBackground(getResources().getDrawable(R.drawable.btn_green_rounded));
                 btn.setEnabled(false);
             } else {
-                String btnPrice = "premium".equals(planId) ? "\u20a6500/3mo" : price + period;
+                String btnPrice = price + period;
                 btn.setText("SUBSCRIBE - " + btnPrice);
                 btn.setTextColor(0xFFFFFFFF);
                 btn.setBackground(getResources().getDrawable(R.drawable.btn_rounded));
@@ -2750,10 +2839,11 @@ public class MainActivity extends Activity {
     }
 
     private void subscribeToPlan(String planId, String planName, String priceLabel) {
-        new AlertDialog.Builder(this)
-            .setTitle("Subscribe to " + planName)
-            .setMessage("This will charge " + priceLabel + " from your wallet balance.\n\nContinue?")
-            .setPositiveButton("Subscribe", (d, w) -> {
+        showAppDialog(
+            "Subscribe to " + planName,
+            "This will charge " + priceLabel + " from your wallet balance.\n\nContinue?",
+            "Subscribe",
+            () -> {
                 String phone = prefs().getString("phone", "");
                 if (phone.isEmpty()) { Toast.makeText(this, "Please login first", Toast.LENGTH_SHORT).show(); return; }
                 Toast.makeText(this, "Processing...", Toast.LENGTH_SHORT).show();
@@ -2800,9 +2890,10 @@ public class MainActivity extends Activity {
                         handler.post(() -> Toast.makeText(this, "Connection failed", Toast.LENGTH_SHORT).show());
                     }
                 }).start();
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
+            },
+            "Cancel",
+            null
+        );
     }
 
     private void switchTab(int tab) {
@@ -2830,7 +2921,12 @@ public class MainActivity extends Activity {
             fetchTransactions();
             loadSavingsHistory(); // always refresh savings when tab opens
         }
-        if (tab == 5) { refreshProfileUI(); loadProfilePhoto(); }
+        if (tab == 4) {
+            if (earnTasksContainer == null) initEarnTab();
+            loadReferralStats();
+            loadEarnTab();
+        }
+        if (tab == 5) { refreshProfileUI(); loadProfilePhoto(); loadActivityLog(); }
     }
 
     private boolean hasUsagePermission() {
@@ -2853,6 +2949,7 @@ public class MainActivity extends Activity {
         tvEarnPending = findViewById(R.id.tvEarnPending);
         tvEarnClaimable = findViewById(R.id.tvEarnClaimable);
         findViewById(R.id.btnRefreshTasks).setOnClickListener(v -> loadEarnTab());
+        findViewById(R.id.btnRefreshTasksBig).setOnClickListener(v -> loadEarnTab());
         findViewById(R.id.btnClaimRewards).setOnClickListener(v -> claimRewards());
         initReferralSection();
     }
@@ -2867,40 +2964,27 @@ public class MainActivity extends Activity {
         tvReferralEarnings = findViewById(R.id.tvReferralEarnings);
         tvReferralReward = findViewById(R.id.tvReferralReward);
 
-        // Generate or load referral code
+        // Generate or load referral code — always use server as source of truth
         String phone = prefs().getString("phone", "");
         if (!phone.isEmpty()) {
-            String refCode = prefs().getString("referral_code", "");
-            if (refCode.isEmpty()) {
-                // Generate referral code from phone
-                refCode = phone.replaceAll("[^0-9]", "");
-                if (refCode.length() > 6) refCode = refCode.substring(refCode.length() - 6);
-                refCode = "DS" + refCode;
-                prefs().edit().putString("referral_code", refCode).apply();
-            }
-            String referralLink = "https://datasaver.app/ref/" + refCode;
-            tvReferralLink.setText(referralLink);
-            tvReferralLink.setOnLongClickListener(v -> {
-                copyToClipboard(referralLink);
-                Toast.makeText(MainActivity.this, "Referral link copied!", Toast.LENGTH_SHORT).show();
-                return true;
-            });
+            tvReferralLink.setText("Loading your code...");
+            tvReferralLink.setOnClickListener(v ->
+                Toast.makeText(MainActivity.this, "Loading referral code, please wait...", Toast.LENGTH_SHORT).show());
         }
 
-        // Share button
         findViewById(R.id.btnShareReferral).setOnClickListener(v -> {
-            String link = tvReferralLink.getText().toString();
-            if (link.startsWith("Generating")) {
+            if (phone == null || phone.isEmpty()) {
                 Toast.makeText(MainActivity.this, "Please login first", Toast.LENGTH_SHORT).show();
                 return;
             }
-            Intent shareIntent = new Intent(Intent.ACTION_SEND);
-            shareIntent.setType("text/plain");
-            shareIntent.putExtra(Intent.EXTRA_TEXT,
-                "Save your mobile data with DataSaver! Block ads, save up to 50% data.\n\n"
-                + "Download now: " + link + "\n\n"
-                + "Use my link and we both earn rewards! \uD83D\uDE80");
-            startActivity(Intent.createChooser(shareIntent, "Share your referral link"));
+            String myCode = prefs().getString("referral_code", "");
+            if (myCode.isEmpty()) {
+                Toast.makeText(MainActivity.this, "Loading referral code... Open Earn tab and try again.", Toast.LENGTH_SHORT).show();
+                loadReferralStats();
+                return;
+            }
+            copyToClipboard(myCode);
+            Toast.makeText(MainActivity.this, "Referral code copied!", Toast.LENGTH_SHORT).show();
         });
 
         // Load referral stats
@@ -2926,10 +3010,20 @@ public class MainActivity extends Activity {
                 int count = res.optInt("referral_count", 0);
                 int earnings = res.optInt("total_earnings", 0);
                 int rewardPerRef = res.optInt("reward_per_referral", 500);
+                String serverCode = res.optString("referral_code", "");
                 handler.post(() -> {
                     tvReferralCount.setText(String.valueOf(count));
                     tvReferralEarnings.setText("\u20a6" + earnings);
                     tvReferralReward.setText("Up to \u20a6" + rewardPerRef + "/referral");
+                    // Use the authoritative code from server so it always matches
+                    if (!serverCode.isEmpty()) {
+                        prefs().edit().putString("referral_code", serverCode).apply();
+                        tvReferralLink.setText("Your code: " + serverCode);
+                        tvReferralLink.setOnClickListener(v -> {
+                            copyToClipboard(serverCode);
+                            Toast.makeText(MainActivity.this, "Referral code copied!", Toast.LENGTH_SHORT).show();
+                        });
+                    }
                 });
             } catch (Exception e) {
                 // Silently fail — stats will show 0
@@ -2940,6 +3034,12 @@ public class MainActivity extends Activity {
     private void copyToClipboard(String text) {
         android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("referral", text));
+    }
+
+    private void preloadEarnTab() {
+        if (prefs().getString("phone", "").isEmpty()) return;
+        if (earnTasksContainer == null) initEarnTab();
+        loadEarnTab();
     }
 
     private void loadEarnTab() {
@@ -3189,11 +3289,9 @@ public class MainActivity extends Activity {
             .setTitle(title)
             .setView(layout)
             .setPositiveButton("START TASK", (d, w) -> {
-                // Open the link externally
                 if (!link.isEmpty()) {
                     try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(link))); } catch (Exception e) {}
                 }
-                // After a short delay, show proof upload dialog
                 proofTaskId = id;
                 handler.postDelayed(() -> showProofUploadDialog(id, title, reward, rewardType), 2000);
             })
@@ -3280,10 +3378,11 @@ public class MainActivity extends Activity {
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) { showAlertDialog("Error", "Please login first"); return; }
 
-        new AlertDialog.Builder(this)
-            .setTitle("Claim Rewards")
-            .setMessage("Your approved rewards will be added to your wallet balance.")
-            .setPositiveButton("Claim Now", (d, w) -> {
+        showAppDialog(
+            "Claim Rewards",
+            "Your approved rewards will be added to your wallet balance.",
+            "Claim Now",
+            () -> {
                 showAlertDialog("Processing", "Claiming your rewards...");
                 new Thread(() -> {
                     try {
@@ -3318,17 +3417,196 @@ public class MainActivity extends Activity {
                         handler.post(() -> showAlertDialog("Error", "Connection failed. Please try again."));
                     }
                 }).start();
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
+            },
+            "Cancel",
+            null
+        );
     }
 
     private void showAlertDialog(String title, String message) {
-        new AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setPositiveButton("OK", null)
-            .show();
+        showAppDialog(title, message);
+    }
+
+    private void showAppDialog(String title, String message) {
+        showAppDialog(title, message, "OK", null, null, null, true);
+    }
+
+    private void showAppDialog(String title, String message, String positiveText, Runnable onPositive,
+            String negativeText, Runnable onNegative) {
+        showAppDialog(title, message, positiveText, onPositive, negativeText, onNegative, true);
+    }
+
+    private void showAppDialog(String title, String message, String positiveText, Runnable onPositive,
+            String negativeText, Runnable onNegative, boolean cancelable) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        if (message != null && !message.isEmpty()) {
+            TextView tvMsg = new TextView(this);
+            tvMsg.setText(message);
+            tvMsg.setTextSize(14);
+            tvMsg.setTextColor(0xFF666666);
+            tvMsg.setLineSpacing(dp(3), 1f);
+            content.addView(tvMsg);
+        }
+        showAppDialogShell(title, content, positiveText, onPositive, negativeText, onNegative, cancelable);
+    }
+
+    private void showNetworkMismatchDialog(String phone, String detected) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+
+        TextView tvHint = new TextView(this);
+        tvHint.setText("This number may belong to a different network than the one you selected.");
+        tvHint.setTextSize(14);
+        tvHint.setTextColor(0xFF666666);
+        tvHint.setLineSpacing(dp(3), 1f);
+        tvHint.setPadding(0, 0, 0, dp(14));
+        content.addView(tvHint);
+
+        content.addView(makeNetworkCompareRow("Detected", networkDisplayName(detected), 0xFF2E7D32, 0xFFE8F5E9));
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(8));
+        View spacer = new View(this);
+        spacer.setLayoutParams(gap);
+        content.addView(spacer);
+        content.addView(makeNetworkCompareRow("Selected", networkDisplayName(selectedNetwork), 0xFFC62828, 0xFFFFEBEE));
+
+        TextView tvWarn = new TextView(this);
+        tvWarn.setText("Sending to the wrong network may fail or credit the wrong line.");
+        tvWarn.setTextSize(12);
+        tvWarn.setTextColor(0xFF888888);
+        tvWarn.setPadding(0, dp(14), 0, 0);
+        content.addView(tvWarn);
+
+        showAppDialogShell(
+            "Check Network",
+            content,
+            "Continue Anyway",
+            () -> proceedWithBuy(phone),
+            "Go Back",
+            null,
+            true
+        );
+    }
+
+    private LinearLayout makeNetworkCompareRow(String label, String network, int textColor, int bgColor) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setBackgroundColor(bgColor);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView tvLabel = new TextView(this);
+        tvLabel.setText(label);
+        tvLabel.setTextSize(12);
+        tvLabel.setTextColor(0xFF888888);
+        tvLabel.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(tvLabel);
+
+        TextView tvNetwork = new TextView(this);
+        tvNetwork.setText(network);
+        tvNetwork.setTextSize(15);
+        tvNetwork.setTypeface(null, Typeface.BOLD);
+        tvNetwork.setTextColor(textColor);
+        row.addView(tvNetwork);
+        return row;
+    }
+
+    private void showAppDialogShell(String title, View contentView, String positiveText, Runnable onPositive,
+            String negativeText, Runnable onNegative, boolean cancelable) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(getResources().getDrawable(R.drawable.card_bg));
+        card.setPadding(dp(22), dp(22), dp(22), dp(18));
+
+        View accent = new View(this);
+        accent.setBackgroundColor(0xFFC62828);
+        LinearLayout.LayoutParams accentLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(4));
+        accentLp.bottomMargin = dp(14);
+        card.addView(accent, accentLp);
+
+        if (title != null && !title.isEmpty()) {
+            TextView tvTitle = new TextView(this);
+            tvTitle.setText(title);
+            tvTitle.setTextSize(18);
+            tvTitle.setTypeface(null, Typeface.BOLD);
+            tvTitle.setTextColor(0xFF333333);
+            tvTitle.setPadding(0, 0, 0, dp(10));
+            card.addView(tvTitle);
+        }
+
+        if (contentView != null) {
+            card.addView(contentView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setCancelable(cancelable)
+            .create();
+
+        if (positiveText != null || negativeText != null) {
+            LinearLayout btnRow = new LinearLayout(this);
+            btnRow.setOrientation(LinearLayout.HORIZONTAL);
+            btnRow.setGravity(Gravity.END);
+            btnRow.setPadding(0, dp(16), 0, 0);
+
+            if (negativeText != null) {
+                TextView btnNeg = makeOutlineBtn(negativeText);
+                btnNeg.setOnClickListener(v -> {
+                    dialog.dismiss();
+                    if (onNegative != null) onNegative.run();
+                });
+                btnRow.addView(btnNeg);
+            }
+            if (positiveText != null) {
+                TextView btnPos = makePrimaryBtn(positiveText);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                lp.leftMargin = dp(10);
+                btnPos.setLayoutParams(lp);
+                btnPos.setOnClickListener(v -> {
+                    dialog.dismiss();
+                    if (onPositive != null) onPositive.run();
+                });
+                btnRow.addView(btnPos);
+            }
+            card.addView(btnRow);
+        }
+
+        dialog.setView(card);
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        }
+        dialog.show();
+    }
+
+    private TextView makePrimaryBtn(String text) {
+        TextView b = new TextView(this);
+        b.setText(text);
+        b.setTextColor(0xFFFFFFFF);
+        b.setTextSize(13);
+        b.setTypeface(null, Typeface.BOLD);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(getResources().getDrawable(R.drawable.btn_rounded));
+        b.setPadding(dp(18), dp(10), dp(18), dp(10));
+        b.setClickable(true);
+        b.setFocusable(true);
+        return b;
+    }
+
+    private TextView makeOutlineBtn(String text) {
+        TextView b = new TextView(this);
+        b.setText(text);
+        b.setTextColor(0xFFC62828);
+        b.setTextSize(13);
+        b.setTypeface(null, Typeface.BOLD);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(getResources().getDrawable(R.drawable.btn_outline_rounded));
+        b.setPadding(dp(18), dp(10), dp(18), dp(10));
+        b.setClickable(true);
+        b.setFocusable(true);
+        return b;
     }
 
     private static final int VPN_REQUEST_CODE = 1002;
@@ -3344,6 +3622,20 @@ public class MainActivity extends Activity {
             polling = false;
             handler.postDelayed(() -> updateUI(), 500);
         } else {
+            // Check if user has a valid subscription before allowing DataSaver
+            String plan = prefs().getString("subscription_plan", "").toLowerCase();
+            if (plan.isEmpty() || plan.equals("none") || plan.equals("basic") || plan.equals("free")) {
+                // No subscription - prompt to subscribe
+                showAppDialog(
+                    "Subscription Required",
+                    "You need an active Premium, Professional, or Enterprise plan to use DataSaver. Would you like to subscribe now?",
+                    "Subscribe",
+                    () -> switchTab(2),
+                    "Cancel",
+                    null
+                );
+                return;
+            }
             // Usage permission is optional — app still works without it (just no app breakdown)
             if (!hasUsagePermission()) {
                 tvAppUsageEmpty.setText("Tap here to grant permission for app usage breakdown (optional)");
@@ -3411,15 +3703,55 @@ public class MainActivity extends Activity {
         updateNotifBadge();
         // Check for new notifications when app comes to foreground
         checkNotificationsOnResume();
+        // Also start periodic notification polling (works even if VPN is off, as long as app is open)
+        startNotificationPolling();
         if ((DataSaverService.isRunning || DataSaverVpnService.isVpnRunning) && !polling) {
             polling = true;
             handler.postDelayed(() -> pollUI(), 1000);
         }
+        
+        // Diagnostic: If VPN shows running but counters are 0, show warning
+        if (DataSaverVpnService.isVpnRunning) {
+            long currentBlocked = DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get();
+            if (currentBlocked == 0) {
+                android.util.Log.w("DataSaver", "VPN running but counters are 0 - possible issue");
+                // Show subtle warning after 5 seconds if still 0
+                handler.postDelayed(() -> {
+                    long nowBlocked = DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get();
+                    if (nowBlocked == 0 && DataSaverVpnService.isVpnRunning) {
+                        android.widget.Toast.makeText(this, 
+                            "VPN is on but not counting. Try toggling off and on again.", 
+                            android.widget.Toast.LENGTH_LONG).show();
+                    }
+                }, 5000);
+            }
+        }
     }
+
+    // Periodic notification polling - runs every 30 seconds when app is open (even if VPN is off)
+    private void startNotificationPolling() {
+        handler.removeCallbacks(notificationPoller);
+        handler.postDelayed(notificationPoller, 30000);
+    }
+    
+    private Runnable notificationPoller = new Runnable() {
+        public void run() {
+            checkNotificationsOnResume();
+            // Keep polling while app is in foreground
+            if (!isFinishing()) {
+                handler.postDelayed(this, 30000);
+            }
+        }
+    };
 
     private void checkNotificationsOnResume() {
         String phone = prefs().getString("phone", "");
         if (phone.isEmpty()) return;
+        
+        // Check for scheduled notifications (daily summary, tasks, upgrades)
+        checkScheduledNotifications();
+        
+        // Check for admin push notifications
         new Thread(() -> {
             try {
                 long lastId = prefs().getLong("last_notif_id", 0);
@@ -3436,9 +3768,16 @@ public class MainActivity extends Activity {
                 JSONArray arr = new JSONArray(sb.toString());
                 if (arr.length() > 0) {
                     long newLastId = lastId;
+                    final String[] latestTitle = {""};
+                    final String[] latestBody = {""};
                     for (int i = 0; i < arr.length(); i++) {
                         long nid = arr.getJSONObject(i).optLong("id", 0);
                         if (nid > newLastId) newLastId = nid;
+                        // Get the latest notification for system popup
+                        if (i == arr.length() - 1) {
+                            latestTitle[0] = arr.getJSONObject(i).optString("title", "DataSaver");
+                            latestBody[0] = arr.getJSONObject(i).optString("body", "");
+                        }
                     }
                     int newCount = arr.length();
                     DataSaverVpnService.unreadNotifCount += newCount;
@@ -3448,9 +3787,142 @@ public class MainActivity extends Activity {
                         .putInt("unread_notif_count", DataSaverVpnService.unreadNotifCount)
                         .apply();
                     handler.post(() -> updateNotifBadge());
+                    // Show system notification popup with vibration
+                    if (!latestBody[0].isEmpty()) {
+                        final String title = latestTitle[0];
+                        final String body = latestBody[0];
+                        handler.post(() -> showPushNotification(title, body));
+                    }
                 }
             } catch (Exception e) {}
         }).start();
+    }
+
+    // Create notification channel for system push notifications
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                "datasaver_push",
+                "DataSaver Notifications",
+                NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("Push notifications for data saved, airtime purchased, and more");
+            channel.enableVibration(true);
+            channel.setVibrationPattern(new long[]{0, 500, 200, 500});
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
+        }
+    }
+
+    // Show system notification
+    private void showPushNotification(String title, String body) {
+        try {
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            PendingIntent pendingIntent = PendingIntent.getActivity(
+                this, 0, intent, PendingIntent.FLAG_IMMUTABLE
+            );
+
+            // Use Notification.Builder for API 11+
+            Notification.Builder builder = new Notification.Builder(this);
+            builder.setContentTitle(title);
+            builder.setContentText(body);
+            builder.setSmallIcon(android.R.drawable.ic_dialog_info);
+            builder.setContentIntent(pendingIntent);
+            builder.setAutoCancel(true);
+            
+            // Set vibration for API < 26
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                builder.setVibrate(new long[]{0, 500, 200, 500});
+            }
+            
+            // Use priority for API < 26
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                builder.setPriority(Notification.PRIORITY_HIGH);
+            }
+
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.notify((int) System.currentTimeMillis(), builder.build());
+            }
+        } catch (Exception e) {
+            // Ignore notification errors
+        }
+    }
+
+    // Check and show scheduled notifications (daily summary, tasks, upgrades)
+    private void checkScheduledNotifications() {
+        try {
+            SharedPreferences prefs = prefs();
+            String phone = prefs.getString("phone", "");
+            if (phone.isEmpty()) return;
+            
+            // Check if push notifications are enabled
+            boolean pushEnabled = prefs.getBoolean("push_notif", true);
+            if (!pushEnabled) return;
+            
+            long now = System.currentTimeMillis();
+            java.util.Calendar cal = java.util.Calendar.getInstance();
+            int hour = cal.get(java.util.Calendar.HOUR_OF_DAY);
+            int minute = cal.get(java.util.Calendar.MINUTE);
+            
+            // Get last notification times
+            long lastDailySummary = prefs.getLong("last_daily_summary", 0);
+            long lastTaskReminder = prefs.getLong("last_task_reminder", 0);
+            long lastUpgradePrompt = prefs.getLong("last_upgrade_prompt", 0);
+            
+            // 1. Daily summary at 9pm (21:00) — only if Daily Usage Alerts are enabled
+            boolean dailyAlertsOn = prefs.getBoolean("daily_alerts", true);
+            if (dailyAlertsOn && hour >= 21 && hour < 22) {
+                if (now - lastDailySummary > 24 * 60 * 60 * 1000) {
+                    // Get today's stats and show summary
+                    long blocked = DataSaverVpnService.blockedAdRequests.get() + DataSaverVpnService.blockedBgSyncs.get();
+                    long savedBytes = blocked * 5 * 1024;
+                    String saved = formatBytes(savedBytes);
+                    String title = "Daily Summary";
+                    String body = "Today you saved " + saved + "! Keep DataSaver running to save more.";
+                    showPushNotification(title, body);
+                    prefs.edit().putLong("last_daily_summary", now).apply();
+                }
+            }
+            
+            // 2. Task reminder (check if there are new tasks - show once per day)
+            if (now - lastTaskReminder > 24 * 60 * 60 * 1000) {
+                final String taskPhone = phone;
+                new Thread(() -> {
+                    try {
+                        URL url = new URL(SERVER_URL + "/api/tasks?phone=" + taskPhone);
+                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                        conn.setConnectTimeout(10000);
+                        if (conn.getResponseCode() == 200) {
+                            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                            StringBuilder sb = new StringBuilder(); String line;
+                            while ((line = reader.readLine()) != null) sb.append(line);
+                            reader.close();
+                            JSONObject res = new JSONObject(sb.toString());
+                            JSONArray tasks = res.optJSONArray("tasks");
+                            if (tasks != null && tasks.length() > 0) {
+                                handler.post(() -> showPushNotification("New Tasks Available!", 
+                                    "You have " + tasks.length() + " tasks waiting. Tap to earn rewards!"));
+                                prefs.edit().putLong("last_task_reminder", System.currentTimeMillis()).apply();
+                            }
+                        }
+                    } catch (Exception e) {}
+                }).start();
+            }
+            
+            // 3. Upgrade prompt for free users (once per week)
+            String plan = prefs.getString("subscription_plan", "none");
+            if ("none".equals(plan) && now - lastUpgradePrompt > 7 * 24 * 60 * 60 * 1000) {
+                showPushNotification("Upgrade to Premium", 
+                    "Get unlimited tasks, higher rewards, and no ads! Tap to upgrade.");
+                prefs.edit().putLong("last_upgrade_prompt", now).apply();
+            }
+        } catch (Exception e) {
+            // Ignore errors
+        }
     }
 
     private void updateUI() {
@@ -3479,12 +3951,26 @@ public class MainActivity extends Activity {
 
     private void pollUI() {
         if (!polling) return;
+        
         // Auto-stop polling if both services have died
         if (!DataSaverService.isRunning && !DataSaverVpnService.isVpnRunning) {
+            // If VPN was running before but now stopped unexpectedly, notify user
+            if (wasVpnRunning) {
+                wasVpnRunning = false;
+                android.widget.Toast.makeText(this, 
+                    "VPN stopped unexpectedly. Tap toggle to restart.", 
+                    android.widget.Toast.LENGTH_LONG).show();
+            }
             polling = false;
             updateUI();
             return;
         }
+        
+        // Track VPN state
+        if (DataSaverVpnService.isVpnRunning) {
+            wasVpnRunning = true;
+        }
+        
         updateUI();
         updateSummary();
         updateAppCards();
@@ -3524,10 +4010,20 @@ public class MainActivity extends Activity {
     }
 
     private void updateSummary() {
-        // DATA USED — from Android NetworkStats (100% real)
+        // Use local data - server sync happens separately
+        updateSummaryLocal();
+    }
+    
+    private void updateSummaryLocal() {
+        // Original local calculation as fallback
         long sessionRx = DataSaverService.totalBytesRx;
         long sessionTx = DataSaverService.totalBytesTx;
-        long totalAppData = sessionRx + sessionTx;
+        long sessionTotal = sessionRx + sessionTx;
+        
+        // Also try today's total as fallback
+        long todayTotal = DataSaverService.getTodayTotalUsage(this);
+        long totalAppData = sessionTotal > 0 ? sessionTotal : todayTotal;
+        
         if (totalAppData <= 0) {
             for (Map.Entry<String, long[]> entry : DataSaverService.appDataUsage.entrySet()) {
                 String n = entry.getKey();
@@ -3535,52 +4031,61 @@ public class MainActivity extends Activity {
                 totalAppData += entry.getValue()[0] + entry.getValue()[1];
             }
         }
-        if (totalAppData == 0) totalAppData = prefs().getLong("saved_totalRx", 0) + prefs().getLong("saved_totalTx", 0);
 
-        // REAL METRICS ONLY — no byte estimates
-        long adReqs = DataSaverVpnService.blockedAdRequests.get();
-        long bgSyncs = DataSaverVpnService.blockedBgSyncs.get();
-        long totalDns = DataSaverVpnService.totalDnsQueries.get();
+        // REAL metrics from VPN (session-based)
+        boolean vpnRunning = DataSaverVpnService.isVpnRunning;
+
+        long adReqs, bgSyncs, totalDns;
+        if (vpnRunning) {
+            adReqs = DataSaverVpnService.blockedAdRequests.get();
+            bgSyncs = DataSaverVpnService.blockedBgSyncs.get();
+            totalDns = DataSaverVpnService.totalDnsQueries.get();
+        } else {
+            adReqs = prefs().getLong("real_ad_requests", 0);
+            bgSyncs = prefs().getLong("real_bg_syncs", 0);
+            totalDns = prefs().getLong("real_total_dns", 0);
+        }
         long totalBlocked = adReqs + bgSyncs;
 
-        // Block rate — blocked DNS queries / total DNS queries (100% real)
-        double blockRate = totalDns > 0 ? (totalBlocked * 100.0 / totalDns) : 0;
-
-        // Show real metrics on dashboard
-        tvUsed.setText(formatBytes(totalAppData));
-        tvSaved.setText(String.valueOf(totalBlocked));
-        tvSavedPct.setText(String.format("%.1f%%", blockRate));
-
-        // Update labels to show what these numbers mean
-        // (labels are set via layout XML, no dynamic update needed)
-
+        // CONSERVATIVE byte estimate: assume each blocked request saves ~5KB on average
+        long estimatedSavedBytes = totalBlocked * 5 * 1024; // 5KB per blocked request
+        
+        // Show SERVER data on dashboard (from Activity Log)
+        // Use local session data as fallback if server data not available
+        long displaySaved = serverTodaySaved > 0 ? serverTodaySaved : estimatedSavedBytes;
+        long displayBlocked = serverTodayBlocked > 0 ? serverTodayBlocked : totalBlocked;
+        
+        tvUsed.setText(formatBytes(totalAppData)); // Keep showing local app data
+        tvSaved.setText(formatBytes(displaySaved)); // Use SERVER data (Today from Activity Log)
+        tvSavedPct.setText(String.format("%,d", displayBlocked) + " blocked"); // Use SERVER data
+        
         // Summary label
         TextView tvSummaryLabel = findViewById(R.id.tvSummaryLabel);
         if (tvSummaryLabel != null) {
             String period = "today".equals(usageFilter) ? "Today" : "week".equals(usageFilter) ? "This Week" : "This Month";
-            long installTime = prefs().getLong("install_time", 0);
-            long daysSinceInstall = installTime > 0 ? (System.currentTimeMillis() - installTime) / (24L * 60 * 60 * 1000) : 0;
-            if (daysSinceInstall < 1) {
-                tvSummaryLabel.setText("Since You Installed DataSaver");
-            } else {
-                tvSummaryLabel.setText("Data Summary (" + period + ")");
-            }
+            // Always show server data label
+            tvSummaryLabel.setText("Server Data (Today)");
         }
 
-        // Real Savings card — show real counts only
+        // Real Savings card — show user-friendly metrics (only when VPN running)
         TextView tvRealAds = findViewById(R.id.tvRealAdsBlocked);
         TextView tvRealData = findViewById(R.id.tvRealDataSaved);
         TextView tvRealMoney = findViewById(R.id.tvRealMoneySaved);
         if (tvRealAds != null) {
-            tvRealAds.setText(String.valueOf(adReqs) + " ads");
-            tvRealData.setText(String.valueOf(bgSyncs) + " bg syncs");
-            tvRealMoney.setText(String.valueOf(totalDns) + " DNS queries");
+            // Estimate: 5KB per blocked request (conservative). totalBlocked already
+            // reflects today's persisted value when the VPN is off.
+            long savedBytes = totalBlocked * 5 * 1024;
+            // Note: We DON'T cap saved <= used - blocking ads saves data that would have been downloaded
+            double savedNaira = bytesToNaira(savedBytes);
+            tvRealAds.setText(String.format("%,d", totalBlocked) + " blocked");
+            tvRealData.setText(formatBytes(savedBytes) + " saved");
+            tvRealMoney.setText(formatNaira(savedNaira) + " value");
         }
 
         // Upgrade banner for free users
         String plan = prefs().getString("subscription_plan", "none");
         if ("none".equals(plan)) {
-            showUpgradeBanner(blockRate, false);
+            showUpgradeBanner(0, false);
         } else {
             hideUpgradeBanner();
         }
@@ -3725,7 +4230,7 @@ public class MainActivity extends Activity {
             textCol.addView(tvName);
 
             TextView tvUsage = new TextView(this);
-            tvUsage.setText("Used " + formatBytes(total) + "  â€¢  Tap for details");
+            tvUsage.setText("Used " + formatBytes(total) + "  \u2022  Tap for details");
             tvUsage.setTextSize(12);
             tvUsage.setTextColor(0xFF888888);
             textCol.addView(tvUsage);
@@ -3767,15 +4272,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    private long totalAppDataForBar() {
+        long total = DataSaverService.totalBytesRx + DataSaverService.totalBytesTx;
+        if (total <= 0) {
+            for (Map.Entry<String, long[]> entry : DataSaverService.appDataUsage.entrySet()) {
+                total += entry.getValue()[0] + entry.getValue()[1];
+            }
+        }
+        return Math.max(total, 1);
+    }
+
     private void showAppDetail(String appName, long rx, long tx, long saved) {
         String plan = prefs().getString("subscription_plan", "none");
         if ("none".equals(plan)) {
-            new AlertDialog.Builder(this)
-                .setTitle("Premium Feature")
-                .setMessage("Tap any app to see detailed usage breakdown.\n\nUpgrade to Premium to unlock full analytics: daily charts, savings per app, and more.")
-                .setPositiveButton("View Plans", (d, w) -> switchTab(2))
-                .setNegativeButton("Later", null)
-                .show();
+            showAppDialog(
+                "Premium Feature",
+                "Tap any app to see detailed usage breakdown.\n\nUpgrade to Premium to unlock full analytics: daily charts, savings per app, and more.",
+                "View Plans",
+                () -> switchTab(2),
+                "Later",
+                null
+            );
             return;
         }
 
@@ -3785,6 +4302,8 @@ public class MainActivity extends Activity {
         if (DataSaverVpnService.perAppBlockedCount.containsKey(appName)) {
             appBlocked = DataSaverVpnService.perAppBlockedCount.get(appName).get();
         }
+        // Estimate saved: 5KB per blocked request
+        long appSavedBytes = appBlocked * 5 * 1024;
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -3795,6 +4314,8 @@ public class MainActivity extends Activity {
             {"Uploaded", formatBytes(tx)},
             {"Total Used", formatBytes(total)},
             {"Ads Blocked", String.valueOf(appBlocked)},
+            {"Data Saved", formatBytes(appSavedBytes)},
+            {"Value Saved", formatNaira(bytesToNaira(appSavedBytes))},
         };
         for (String[] r : rows) {
             LinearLayout row = new LinearLayout(this);
@@ -3818,7 +4339,8 @@ public class MainActivity extends Activity {
 
         // Bar chart title
         TextView chartTitle = new TextView(this);
-        chartTitle.setText("Last 7 Days");
+        String period = "today".equals(usageFilter) ? "Today" : "week".equals(usageFilter) ? "This Week" : "This Month";
+        chartTitle.setText(period + " - Data Used");
         chartTitle.setTextSize(13); chartTitle.setTextColor(0xFFC62828); chartTitle.setTypeface(null, Typeface.BOLD);
         chartTitle.setPadding(0, 0, 0, dp(8));
         layout.addView(chartTitle);
@@ -3834,11 +4356,30 @@ public class MainActivity extends Activity {
         chartContainer.setPadding(dp(4), dp(8), dp(4), dp(4));
         layout.addView(chartContainer);
 
-        // Load daily data in background, then draw bars
-        new Thread(() -> {
-            long[] daily = DataSaverService.getDailyUsage(this, appName);
-            handler.post(() -> drawBarChart(chartContainer, daily));
-        }).start();
+        // Show today's data for this app
+        long appTotal = rx + tx;
+        handler.post(() -> {
+            // Simple bar showing this app's usage relative to total
+            LinearLayout bar = new LinearLayout(MainActivity.this);
+            bar.setOrientation(LinearLayout.VERTICAL);
+            bar.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            bar.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+            
+            View barFill = new View(MainActivity.this);
+            int barHeight = appTotal > 0 ? (int) (dp(100) * Math.min((double) appTotal / Math.max(totalAppDataForBar(), 1), 1.0)) : dp(4);
+            barFill.setLayoutParams(new LinearLayout.LayoutParams(dp(40), Math.max(barHeight, dp(4))));
+            barFill.setBackgroundColor(0xFF43A047);
+            bar.addView(barFill);
+            
+            TextView label = new TextView(MainActivity.this);
+            label.setText(formatBytes(appTotal));
+            label.setTextSize(10);
+            label.setTextColor(0xFF666666);
+            label.setGravity(Gravity.CENTER);
+            bar.addView(label);
+            
+            chartContainer.addView(bar);
+        });
 
         new AlertDialog.Builder(this)
             .setTitle(appName + " - Analytics")
@@ -4018,6 +4559,7 @@ public class MainActivity extends Activity {
     static String formatBytes(long b) {
         if (b < 1024) return b + " B";
         if (b < 1024 * 1024) return (b / 1024) + " KB";
-        return String.format("%.1f MB", b / (1024.0 * 1024.0));
+        if (b < 1024L * 1024 * 1024) return String.format("%.1f MB", b / (1024.0 * 1024.0));
+        return String.format("%.2f GB", b / (1024.0 * 1024.0 * 1024.0));
     }
 }
