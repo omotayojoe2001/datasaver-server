@@ -1288,12 +1288,22 @@ app.get('/admin/api/landing-analytics', adminAuth, async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     const weekAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data: dailySummary, error: dailyErr } = await supabase
+    let dailySummary = [];
+    const dailyRes = await supabase
       .from('acorn_hub_ds_analytics_daily_summary')
       .select('*')
       .gte('day', sinceDay)
       .order('day', { ascending: false });
-    if (dailyErr) return res.status(500).json({ error: dailyErr.message });
+    if (dailyRes.error) {
+      const fallback = await supabase
+        .from('acorn_hub_ds_analytics_daily_summary')
+        .select('*')
+        .order('day', { ascending: false })
+        .limit(days);
+      if (!fallback.error) dailySummary = fallback.data || [];
+    } else {
+      dailySummary = dailyRes.data || [];
+    }
 
     const { data: recentEvents, error: eventsErr } = await supabase
       .from('acorn_hub_ds_analytics_events')
@@ -1418,7 +1428,7 @@ app.get('/admin/api/landing-analytics', adminAuth, async (req, res) => {
       }).sort((a, b) => b.count - a.count),
       clicks_by_type: clicksByType,
       top_referrers: topReferrers,
-      daily_summary: dailySummary || [],
+      daily_summary: dailySummary,
       recent_events: (recentEvents || []).slice(0, 100).map(e => ({
         ...e,
         event_label: eventLabels[e.event_type] || e.event_type,
