@@ -1278,6 +1278,160 @@ app.get('/admin/api/dashboard', adminAuth, async (req, res) => {
   }
 });
 
+// Landing page analytics (/ecosystem/data-saver on Acorn website)
+app.get('/admin/api/landing-analytics', adminAuth, async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days) || 30, 90);
+    const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+    const sinceIso = new Date(sinceMs).toISOString();
+    const sinceDay = sinceIso.split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: dailySummary, error: dailyErr } = await supabase
+      .from('acorn_hub_ds_analytics_daily_summary')
+      .select('*')
+      .gte('day', sinceDay)
+      .order('day', { ascending: false });
+    if (dailyErr) return res.status(500).json({ error: dailyErr.message });
+
+    const { data: recentEvents, error: eventsErr } = await supabase
+      .from('acorn_hub_ds_analytics_events')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (eventsErr) return res.status(500).json({ error: eventsErr.message });
+
+    const { data: periodEvents, error: periodErr } = await supabase
+      .from('acorn_hub_ds_analytics_events')
+      .select('event_type, event_location, session_id, referrer, created_at, metadata')
+      .gte('created_at', sinceIso)
+      .order('created_at', { ascending: false })
+      .limit(5000);
+    if (periodErr) return res.status(500).json({ error: periodErr.message });
+
+    const allEvents = periodEvents || [];
+    const isToday = (ts) => ts && ts.startsWith(today);
+    const isThisWeek = (ts) => ts && ts >= weekAgoIso;
+
+    function sessionSet(events, type, filterFn) {
+      const s = new Set();
+      events.forEach(e => {
+        if (type && e.event_type !== type) return;
+        if (filterFn && !filterFn(e.created_at)) return;
+        if (e.session_id) s.add(e.session_id);
+      });
+      return s;
+    }
+
+    function countEvents(type, filterFn) {
+      return allEvents.filter(e => e.event_type === type && (!filterFn || filterFn(e.created_at))).length;
+    }
+
+    const pageViewSessionsAll = sessionSet(allEvents, 'page_view');
+    const pageViewSessionsToday = sessionSet(allEvents, 'page_view', isToday);
+    const pageViewSessionsWeek = sessionSet(allEvents, 'page_view', isThisWeek);
+    const scrollSessions = sessionSet(allEvents, 'scroll_end');
+
+    const clickTypes = ['click_playstore', 'click_android'];
+    const dialogTypes = ['dialog_proceed_download', 'dialog_see_instructions', 'dialog_complete_download'];
+
+    const clicksByLocation = {};
+    allEvents.forEach(e => {
+      if (!clickTypes.includes(e.event_type)) return;
+      const loc = e.event_location || 'unknown';
+      const key = loc + '|' + e.event_type;
+      clicksByLocation[key] = (clicksByLocation[key] || 0) + 1;
+    });
+
+    const clicksByType = {};
+    clickTypes.forEach(t => { clicksByType[t] = countEvents(t); });
+    dialogTypes.forEach(t => { clicksByType[t] = countEvents(t); });
+    clicksByType.scroll_end = countEvents('scroll_end');
+
+    const funnel = {
+      page_views: countEvents('page_view'),
+      any_download_click: allEvents.filter(e => clickTypes.includes(e.event_type)).length,
+      dialog_proceed: countEvents('dialog_proceed_download'),
+      dialog_complete: countEvents('dialog_complete_download'),
+      unique_sessions_page_view: pageViewSessionsAll.size,
+      unique_sessions_any_click: sessionSet(allEvents.filter(e => clickTypes.includes(e.event_type)), null).size
+    };
+
+    const referrerCounts = {};
+    allEvents.filter(e => e.event_type === 'page_view').forEach(e => {
+      const ref = (e.referrer && e.referrer.trim()) ? e.referrer.trim() : '(direct / none)';
+      referrerCounts[ref] = (referrerCounts[ref] || 0) + 1;
+    });
+    const topReferrers = Object.entries(referrerCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 15)
+      .map(([referrer, count]) => ({ referrer, count }));
+
+    const locationLabels = {
+      hero: 'Hero (top section)',
+      social_proof: 'Social proof (screenshots)',
+      get_started: 'Get started banner',
+      dialog: 'Install dialog',
+      page: 'Page (general)',
+      unknown: 'Unknown'
+    };
+
+    const eventLabels = {
+      page_view: 'Page view',
+      click_playstore: 'Play Store click',
+      click_android: 'Android APK click',
+      scroll_end: 'Scrolled to bottom',
+      dialog_proceed_download: 'Dialog: Proceed & Download',
+      dialog_see_instructions: 'Dialog: See Instructions',
+      dialog_complete_download: 'Dialog: Complete Download'
+    };
+
+    res.json({
+      page_path: '/ecosystem/data-saver',
+      period_days: days,
+      summary: {
+        page_views_today: countEvents('page_view', isToday),
+        page_views_week: countEvents('page_view', isThisWeek),
+        page_views_period: countEvents('page_view'),
+        unique_visitors_today: pageViewSessionsToday.size,
+        unique_visitors_week: pageViewSessionsWeek.size,
+        unique_visitors_period: pageViewSessionsAll.size,
+        scroll_end_count: countEvents('scroll_end'),
+        scroll_rate_pct: pageViewSessionsAll.size
+          ? Math.round((scrollSessions.size / pageViewSessionsAll.size) * 1000) / 10
+          : 0,
+        playstore_clicks: countEvents('click_playstore'),
+        android_clicks: countEvents('click_android'),
+        total_download_clicks: countEvents('click_playstore') + countEvents('click_android')
+      },
+      funnel,
+      clicks_by_location: Object.entries(clicksByLocation).map(([key, count]) => {
+        const [loc, type] = key.split('|');
+        return {
+          location: loc,
+          location_label: locationLabels[loc] || loc,
+          event_type: type,
+          event_label: eventLabels[type] || type,
+          count
+        };
+      }).sort((a, b) => b.count - a.count),
+      clicks_by_type: clicksByType,
+      top_referrers: topReferrers,
+      daily_summary: dailySummary || [],
+      recent_events: (recentEvents || []).slice(0, 100).map(e => ({
+        ...e,
+        event_label: eventLabels[e.event_type] || e.event_type,
+        location_label: locationLabels[e.event_location] || e.event_location || '-'
+      })),
+      event_labels: eventLabels,
+      location_labels: locationLabels
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Debug test route
 app.get('/admin/api/test-new-route', adminAuth, async (req, res) => {
   res.json({ success: true, message: 'New route works!' });
