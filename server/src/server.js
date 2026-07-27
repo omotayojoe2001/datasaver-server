@@ -1896,6 +1896,7 @@ app.use(compression({ level: 9 }));
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
+    build: '2026-07-27-landing-analytics',
     saved: {
       original: totalOriginal,
       compressed: totalCompressed,
